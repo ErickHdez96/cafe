@@ -1,0 +1,10 @@
+[package]
+name = "cafe"
+version = "0.1.0"
+edition = "2021"
+authors = ["Erick Hernandez Curiel <erick@hernandezcuriel.dev>"]
+
+[dependencies]
+
+[dev-dependencies]
+expect-test = "1"
