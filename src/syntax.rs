@@ -1,11 +1,13 @@
 pub mod ast;
 pub mod scanner;
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum SyntaxKind {
     Root,
     // Ast nodes
+    List,
+
     // Tokens
     /// ( [
     OpenDelim,
@@ -55,6 +57,7 @@ pub enum SyntaxKind {
     DatumComment,
 
     Whitespace,
+    #[default]
     Error,
     Eof,
 }
