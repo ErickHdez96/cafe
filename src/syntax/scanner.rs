@@ -1,8 +1,8 @@
-use std::{iter, str::Chars};
+use std::{fmt, iter, str::Chars};
 
 use crate::syntax::{SyntaxKind, SyntaxKind as SK};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
 pub struct Token<'input> {
     pub kind: SyntaxKind,
     pub source: &'input str,
@@ -11,6 +11,20 @@ pub struct Token<'input> {
 impl<'input> Token<'input> {
     pub fn new(kind: SyntaxKind, source: &'input str) -> Self {
         Self { kind, source }
+    }
+
+    pub fn is_trivia(self) -> bool {
+        self.kind.is_trivia()
+    }
+}
+
+impl fmt::Display for Token<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.kind {
+            SyntaxKind::Eof => "<eof>".fmt(f),
+            SyntaxKind::Whitespace => "<whitespace>".fmt(f),
+            _ => self.source.fmt(f),
+        }
     }
 }
 

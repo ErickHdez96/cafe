@@ -53,7 +53,12 @@ impl GreenNodeBuilder {
             .expect("start_node and finish_node don't match");
         std::mem::swap(&mut self.sk, &mut kind);
         std::mem::swap(&mut self.children, &mut children);
-        self.get_or_intern_tree(GreenTree::Node { kind, children })
+        let text_length = children.iter().map(|c| c.text_length()).sum();
+        self.get_or_intern_tree(GreenTree::Node {
+            kind,
+            text_length,
+            children,
+        })
     }
 }
 
@@ -61,6 +66,7 @@ impl GreenNodeBuilder {
 pub enum GreenTree {
     Node {
         kind: SyntaxKind,
+        text_length: usize,
         children: Vec<Rc<GreenTree>>,
     },
     Token {
@@ -70,12 +76,22 @@ pub enum GreenTree {
 }
 
 impl GreenTree {
+    pub fn node(kind: SyntaxKind, children: Vec<Rc<GreenTree>>) -> Self {
+        let text_length = children.iter().map(|c| c.text_length()).sum();
+        Self::Node {
+            kind,
+            text_length,
+            children,
+        }
+    }
+
+    pub fn token(kind: SyntaxKind, text: String) -> Self {
+        Self::Token { kind, text }
+    }
+
     pub fn text_length(&self) -> usize {
         match &self {
-            GreenTree::Node { children, .. } => children
-                .iter()
-                .map(|tree| GreenTree::text_length(tree.as_ref()))
-                .sum(),
+            GreenTree::Node { text_length, .. } => *text_length,
             GreenTree::Token { text, .. } => text.len(),
         }
     }
@@ -102,10 +118,10 @@ impl fmt::Debug for GreenTree {
             let mut precision = f.precision().unwrap_or_default();
             let padding = " ".repeat(width);
             match &self {
-                GreenTree::Node { kind, children } => {
+                GreenTree::Node { kind, children, .. } => {
                     write!(f, "{padding}{kind:?}@{precision}..{}", self.text_length())?;
                     if !children.is_empty() {
-                        write!(f, "\n")?;
+                        writeln!(f)?;
                     }
                     for (i, c) in children.iter().enumerate() {
                         write!(
@@ -117,7 +133,7 @@ impl fmt::Debug for GreenTree {
                         )?;
                         precision += c.text_length();
                         if i < children.len() - 1 {
-                            writeln!(f, "")?;
+                            writeln!(f)?;
                         }
                     }
                     Ok(())
@@ -125,14 +141,19 @@ impl fmt::Debug for GreenTree {
                 GreenTree::Token { kind, text } => write!(
                     f,
                     "{padding}{kind:?}@{precision}..{} \"{text}\"",
-                    self.text_length()
+                    precision + self.text_length()
                 ),
             }
         } else {
             match &self {
-                GreenTree::Node { kind, children } => f
+                GreenTree::Node {
+                    kind,
+                    text_length,
+                    children,
+                } => f
                     .debug_struct("GreenTree::Node")
                     .field("kind", &kind)
+                    .field("text_length", &text_length)
                     .field("children", &children)
                     .finish(),
                 GreenTree::Token { kind, text } => f
@@ -154,26 +175,11 @@ mod tests {
 
     #[test]
     fn tree_to_string() {
-        let five = Rc::new(GreenTree::Token {
-            kind: SK::Number,
-            text: String::from("5"),
-        });
-        let ten = Rc::new(GreenTree::Token {
-            kind: SK::Number,
-            text: String::from("10"),
-        });
-        let ws = Rc::new(GreenTree::Token {
-            kind: SK::Whitespace,
-            text: String::from(" "),
-        });
-        let plus = Rc::new(GreenTree::Token {
-            kind: SK::Identifier,
-            text: String::from("+"),
-        });
-        let tree = GreenTree::Node {
-            kind: SK::Root,
-            children: vec![five, ws.clone(), plus, ws, ten],
-        };
+        let five = Rc::new(GreenTree::token(SK::Number, String::from("5")));
+        let ten = Rc::new(GreenTree::token(SK::Number, String::from("10")));
+        let ws = Rc::new(GreenTree::token(SK::Whitespace, String::from(" ")));
+        let plus = Rc::new(GreenTree::token(SK::Identifier, String::from("+")));
+        let tree = GreenTree::node(SK::Root, vec![five, ws.clone(), plus, ws, ten]);
         assert_eq!("5 + 10", tree.to_string());
     }
 
@@ -197,13 +203,14 @@ mod tests {
             Root@0..8
               List@0..8
                 OpenDelim@0..1 "("
-                Identifier@1..1 "+"
-                Whitespace@2..1 " "
-                Identifier@3..1 "5"
-                Whitespace@4..1 " "
-                Identifier@5..2 "10"
-                OpenDelim@7..1 ")"
-        "#]].assert_debug_eq(&tree);
+                Identifier@1..2 "+"
+                Whitespace@2..3 " "
+                Identifier@3..4 "5"
+                Whitespace@4..5 " "
+                Identifier@5..7 "10"
+                OpenDelim@7..8 ")"
+        "#]]
+        .assert_debug_eq(&tree);
     }
 
     #[test]
@@ -238,12 +245,14 @@ mod tests {
             GreenTree::Node {
                 kind: SK::Root,
                 children,
+                ..
             } => {
                 assert_eq!(1, children.len());
                 match children[0].as_ref() {
                     GreenTree::Node {
                         kind: SK::List,
                         children,
+                        ..
                     } => {
                         assert_eq!(7, children.len());
                         // (+ 1 1)
@@ -255,6 +264,7 @@ mod tests {
                             GreenTree::Node {
                                 kind: SK::List,
                                 children: inner_children,
+                                ..
                             } => {
                                 assert_eq!(7, inner_children.len());
                                 // 1
