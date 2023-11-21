@@ -2,6 +2,7 @@ use std::rc::Rc;
 
 use crate::{
     diagnostics::{Diagnostic, DiagnosticBuilder},
+    file::SourceFile,
     parse_tree::{GreenNodeBuilder, GreenTree},
     span::Span,
 };
@@ -18,11 +19,16 @@ pub struct ParseResult {
 }
 
 pub fn parse_str(input: &str) -> ParseResult {
-    parse_str_with_config(input, ParserConfig::default())
+    parse_str_with_config(input, 0, ParserConfig::default())
 }
 
-pub fn parse_str_with_config(input: &str, config: ParserConfig) -> ParseResult {
+pub fn parse_source_file(file: &SourceFile, config: ParserConfig) -> ParseResult {
+    parse_str_with_config(&file.contents, file.id.value(), config)
+}
+
+pub fn parse_str_with_config(input: &str, file_id: u16, config: ParserConfig) -> ParseResult {
     let mut p = Parser::new(input, config);
+    p.file_id = file_id;
     p.parse();
     ParseResult {
         tree: p.builder.finish(),
@@ -131,7 +137,11 @@ impl<'input> Parser<'input> {
             | SyntaxKind::Char
             | SyntaxKind::Identifier
             | SyntaxKind::String => self.atom(),
-            SyntaxKind::Error => todo!(),
+            SyntaxKind::Error => {
+                let msg = format!("expected a datum, found {}", self.peek().source);
+                self.err_span(msg);
+                self.bump();
+            }
             SyntaxKind::Eof => {}
             _ => unreachable!(),
         }
@@ -409,16 +419,19 @@ pub fn unicode_hex_escape_sequence(s: &str) -> Option<DiagnosticBuilder> {
 pub fn validate_identifier(s: &str, file_id: u16, offset: u32) -> Vec<DiagnosticBuilder> {
     let mut diags = vec![];
     match s.chars().next() {
-        c @ Some('+') | c @ Some('.') | c @ Some('-') if s.chars().nth(2) != Some('>') => {
-            diags.push(
-                Diagnostic::builder()
-                    .msg(format!(
-                        "identifiers cannot begin with {}",
-                        c.unwrap_or_default()
-                    ))
-                    .span(Span::new(file_id, offset, s.len().try_into().unwrap())),
-            );
-        }
+        c @ Some('+') | c @ Some('.') | c @ Some('-') if s.chars().nth(1) != Some('>') => match s {
+            "+" | "..." | "-" => {}
+            _ => {
+                diags.push(
+                    Diagnostic::builder()
+                        .msg(format!(
+                            "identifiers cannot begin with {}",
+                            c.unwrap_or_default()
+                        ))
+                        .span(Span::new(file_id, offset, s.len().try_into().unwrap())),
+                );
+            }
+        },
         _ => {}
     }
 
@@ -436,7 +449,7 @@ pub fn validate_identifier(s: &str, file_id: u16, offset: u32) -> Vec<Diagnostic
                                 .msg("unfinished hex escape sequence")
                                 .span(Span::new(
                                     file_id,
-                                    start,
+                                    offset + start,
                                     (current - start).try_into().unwrap(),
                                 )),
                         );
@@ -493,7 +506,7 @@ pub fn validate_char(s: &str) -> Option<DiagnosticBuilder> {
     assert!(s.starts_with("#\\"));
     let s = &s[2..];
 
-    if s.chars().nth(2).is_none() {
+    if s.chars().nth(1).is_none() {
         // Simple case, one character
         match s.chars().next() {
             Some(_) => None,
@@ -597,6 +610,22 @@ mod tests {
                 Root@0..3
                   Atom@0..3
                     Char@0..3 "#\ "
+            "##]],
+        );
+        check(
+            r"#\x",
+            expect![[r##"
+                Root@0..3
+                  Atom@0..3
+                    Char@0..3 "#\x"
+            "##]],
+        );
+        check(
+            r"#\n",
+            expect![[r##"
+                Root@0..3
+                  Atom@0..3
+                    Char@0..3 "#\n"
             "##]],
         );
         check(
@@ -818,6 +847,38 @@ mod tests {
                 Root@0..11
                   Atom@0..11
                     Identifier@0..11 "hello-world"
+            "#]],
+        );
+        check(
+            "+",
+            expect![[r#"
+                Root@0..1
+                  Atom@0..1
+                    Identifier@0..1 "+"
+            "#]],
+        );
+        check(
+            "-",
+            expect![[r#"
+                Root@0..1
+                  Atom@0..1
+                    Identifier@0..1 "-"
+            "#]],
+        );
+        check(
+            "...",
+            expect![[r#"
+                Root@0..3
+                  Atom@0..3
+                    Identifier@0..3 "..."
+            "#]],
+        );
+        check(
+            "->",
+            expect![[r#"
+                Root@0..2
+                  Atom@0..2
+                    Identifier@0..2 "->"
             "#]],
         );
         check(
@@ -1324,7 +1385,7 @@ mod tests {
         use super::*;
 
         fn check(input: &str, expected: Expect) {
-            let result = parse_str_with_config(input, ParserConfig::extended());
+            let result = parse_str_with_config(input, 0, ParserConfig::extended());
             assert_eq!(Vec::<Diagnostic>::default(), result.diagnostics);
             expected.assert_debug_eq(&result.tree);
         }
