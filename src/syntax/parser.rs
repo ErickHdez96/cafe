@@ -1,6 +1,7 @@
 use std::rc::Rc;
 
 use crate::{
+    config::ParserConfig,
     diagnostics::{Diagnostic, DiagnosticBuilder},
     file::SourceFile,
     parse_tree::{GreenNodeBuilder, GreenTree},
@@ -47,17 +48,6 @@ struct Parser<'input> {
     file_id: u16,
     config: ParserConfig,
     last_seen_token_span: Span,
-}
-
-#[derive(Default, Copy, Clone, PartialEq, Eq)]
-pub struct ParserConfig {
-    braces: bool,
-}
-
-impl ParserConfig {
-    pub fn extended() -> Self {
-        Self { braces: true }
-    }
 }
 
 #[derive(Copy, Clone, PartialEq, Eq)]

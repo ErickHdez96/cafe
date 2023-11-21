@@ -10,10 +10,13 @@ use std::{
 };
 
 use crate::{
+    config::CompilerConfig,
     diagnostics::Diagnostic,
     file::{FileId, SourceFile},
     syntax::parser::ParseResult,
 };
+
+pub use providers::set_compiler_config;
 
 mod providers;
 
@@ -27,12 +30,30 @@ fn get_hash(h: impl Hash) -> u64 {
 }
 
 macro_rules! build_system {
-    ($bsname:ident, $storagename:ident, $({
-        name: $name:ident,
-        provider: $provider:path,
-        key: $key:ty,
-        result: $result:ty,
-    }),+ $(,)?) => {
+    (
+        $bsname:ident,
+        $storagename:ident,
+        tasks: [
+            $({
+                name: $name:ident,
+                provider: $provider:path,
+                key: $key:ty,
+                result: $result:ty $(,)?
+            }),+
+            $(,)?
+        ]
+        $(,
+            inputs: [
+              $({
+                  name: $input_name:ident,
+                  setter: $input_setter:path,
+                  ty: $input_ty:ty $(,)?
+              }),+
+              $(,)?
+            ]
+        )?
+        $(,)?
+    ) => {
         #[derive(Default)]
         struct $storagename {
             $($name: std::collections::HashMap<$key, $result>),+
@@ -57,6 +78,7 @@ macro_rules! build_system {
             }
 
             $(impl_query!($name, $key, $result);)+
+            $($(impl_feed_input!($input_name, $input_setter, $input_ty);)+)?
         }
 
         impl Default for $bsname {
@@ -95,27 +117,50 @@ macro_rules! impl_query {
     };
 }
 
+macro_rules! impl_feed_input {
+    ($name:ident, $setter:path, $ty:ty) => {
+        pub fn $name(&self, ty: $ty) {
+            $setter(ty);
+        }
+    };
+}
+
 build_system! {
     BuildSystem,
     BuildSystemStorage,
-    {
-        name: read_file,
-        provider: providers::read_file_provider,
-        key: PathBuf,
-        result: Res<Rc<SourceFile>>,
-    },
-    {
-        name: file,
-        provider: providers::file_provider,
-        key: FileId,
-        result: Option<Rc<SourceFile>>,
-    },
-    {
-        name: parse,
-        provider: providers::parse_provider,
-        key: PathBuf,
-        result: Res<ParseResult>,
-    },
+    tasks: [
+        {
+            name: compiler_config,
+            provider: providers::compiler_config_provider,
+            key: (),
+            result: Rc<CompilerConfig>,
+        },
+        {
+            name: read_file,
+            provider: providers::read_file_provider,
+            key: PathBuf,
+            result: Res<Rc<SourceFile>>,
+        },
+        {
+            name: file,
+            provider: providers::file_provider,
+            key: FileId,
+            result: Option<Rc<SourceFile>>,
+        },
+        {
+            name: parse,
+            provider: providers::parse_provider,
+            key: PathBuf,
+            result: Res<ParseResult>,
+        },
+    ],
+    inputs: [
+        {
+            name: feed_compiler_config,
+            setter: providers::set_compiler_config,
+            ty: CompilerConfig,
+        }
+    ],
 }
 
 /// A Query is the pair of the provider function (its pointer) and a key (its hash.)
@@ -321,18 +366,20 @@ mod tests {
         build_system! {
             TestBS,
             TestBSStorage,
-            {
-                name: a,
-                provider: a_provider,
-                key: i32,
-                result: i32,
-            },
-            {
-                name: b,
-                provider: b_provider,
-                key: i32,
-                result: i32,
-            },
+            tasks: [
+                {
+                    name: a,
+                    provider: a_provider,
+                    key: i32,
+                    result: i32,
+                },
+                {
+                    name: b,
+                    provider: b_provider,
+                    key: i32,
+                    result: i32,
+                },
+            ],
         }
 
         let qctx = TestBS::new();
