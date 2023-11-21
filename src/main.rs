@@ -1,10 +1,10 @@
 use cafe::{
     diagnostics::{emit_diagnostic, emit_diagnostics},
-    query::Query,
+    query::BuildSystem,
 };
 
 fn main() {
-    let qctx = Query::default();
+    let qctx = BuildSystem::default();
     let mut args = std::env::args();
 
     match qctx.parse(args.nth(1).expect("USAGE: cafe [INPUT]").into()) {

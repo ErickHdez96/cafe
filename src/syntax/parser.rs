@@ -12,7 +12,7 @@ use super::{
     SyntaxKind,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ParseResult {
     pub tree: Rc<GreenTree>,
     pub diagnostics: Vec<Diagnostic>,

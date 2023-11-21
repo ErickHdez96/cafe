@@ -6,9 +6,9 @@ use crate::{
     syntax::parser::{parse_source_file, ParseResult, ParserConfig},
 };
 
-use super::{Query, Res};
+use super::{QCtx, Res};
 
-pub fn read_file_provider(_: &Query, path: PathBuf) -> Res<Rc<SourceFile>> {
+pub fn read_file_provider(_: &QCtx, path: PathBuf) -> Res<Rc<SourceFile>> {
     match std::fs::read_to_string(&path) {
         Ok(contents) => {
             let file = Rc::new(SourceFile::new(path, contents));
@@ -21,11 +21,11 @@ pub fn read_file_provider(_: &Query, path: PathBuf) -> Res<Rc<SourceFile>> {
     }
 }
 
-pub fn file_provider(_: &Query, id: FileId) -> Option<Rc<SourceFile>> {
+pub fn file_provider(_: &QCtx, id: FileId) -> Option<Rc<SourceFile>> {
     FILE_MAPPING.with(|map| map.borrow_mut().get(&id).cloned())
 }
 
-pub fn parse_provider(qctx: &Query, path: PathBuf) -> Res<ParseResult> {
+pub fn parse_provider(qctx: &QCtx, path: PathBuf) -> Res<ParseResult> {
     let source_file = qctx.read_file(path)?;
     Ok(parse_source_file(&source_file, ParserConfig::default()))
 }

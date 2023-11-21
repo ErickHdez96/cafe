@@ -2,11 +2,11 @@ use std::fmt::{self, Write};
 
 use crate::{
     atty::{Color, Style},
-    query::Query,
+    query::BuildSystem,
     span::Span,
 };
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum DiagnosticLevel {
     Error,
     Warning,
@@ -33,7 +33,7 @@ impl fmt::Display for DiagnosticLevel {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Diagnostic {
     pub level: DiagnosticLevel,
     pub span: Span,
@@ -50,99 +50,52 @@ impl Diagnostic {
         self.span.is_dummy() && self.sources.is_empty()
     }
 
-    pub fn to_string(&self, qctx: &Query, atty: bool) -> String {
+    pub fn to_string(&self, qctx: &BuildSystem, atty: bool) -> String {
+        let level = self.level.style().atty(atty).finish();
         if self.is_simple() {
-            format!(
-                "{}{}{}: {}",
-                if atty {
-                    self.level.style().to_string()
-                } else {
-                    String::new()
-                },
-                self.level,
-                if atty {
-                    Style::new().to_string()
-                } else {
-                    String::new()
-                },
-                self.message
-            )
+            format!("{}: {}", level(&self.level), self.message)
         } else {
             let file = qctx.file(self.span.file_id()).expect("invalid file id");
             let pos = file.position(self.span);
             let text = file.get_text(self.span);
             let line_number_length = pos.end_row.to_string().len();
-            let blue = if atty {
-                Style::new().bold().color(Color::BrightBlue).to_string()
-            } else {
-                String::new()
-            };
-            let clear = if atty {
-                Style::new().to_string()
-            } else {
-                String::new()
-            };
+            let blue = Style::new()
+                .bold()
+                .color(Color::BrightBlue)
+                .atty(atty)
+                .finish();
             let mut out = String::new();
 
             let _ = writeln!(
                 out,
-                "{}{}{}: {}{}{}",
-                if atty {
-                    self.level.style().to_string()
-                } else {
-                    String::new()
-                },
-                self.level,
-                if atty {
-                    Style::new().to_string()
-                } else {
-                    String::new()
-                },
-                if atty {
-                    Style::new().bold().to_string()
-                } else {
-                    String::new()
-                },
-                self.message,
-                if atty {
-                    Style::new().to_string()
-                } else {
-                    String::new()
-                }
+                "{}: {}",
+                level(&self.level),
+                Style::new().bold().atty(atty).finish()(&self.message),
             );
             let _ = write!(out, "{}", " ".repeat(line_number_length));
             let _ = writeln!(
                 out,
-                "{}-->{} {}:{}:{}",
-                blue,
-                clear,
+                "{} {}:{}:{}",
+                blue(&"-->"),
                 file.path.to_string_lossy(),
                 pos.start_row + 1,
                 pos.start_col + 1,
             );
 
             if pos.start_row == pos.end_row {
-                let _ = writeln!(out, "{} {}│{}", " ".repeat(line_number_length), blue, clear);
-                let _ = write!(out, "{}{} │{}", blue, pos.start_row + 1, clear);
+                let _ = writeln!(out, "{} {}", " ".repeat(line_number_length), blue(&'|'));
+                let _ = write!(out, "{}", blue(&format!("{} |", pos.start_row + 1)));
                 let _ = writeln!(out, " {}", text);
+                let _ = write!(out, "{} {} ", " ".repeat(line_number_length), blue(&'|'),);
                 let _ = write!(
                     out,
-                    "{} {}│{} ",
-                    " ".repeat(line_number_length),
-                    blue,
-                    clear
-                );
-                let _ = write!(
-                    out,
-                    "{}{}{}{}",
+                    "{}{}",
                     " ".repeat(pos.start_col),
-                    self.level.style(),
-                    if self.level == DiagnosticLevel::Hint {
+                    level(&if self.level == DiagnosticLevel::Hint {
                         "-".repeat(pos.end_col - pos.start_col)
                     } else {
                         "^".repeat(pos.end_col - pos.start_col)
-                    },
-                    clear
+                    }),
                 );
             }
 
@@ -219,12 +172,12 @@ impl DiagnosticBuilder {
     }
 }
 
-pub fn emit_diagnostics(qctx: &Query, diagnostics: &[Diagnostic]) {
+pub fn emit_diagnostics(qctx: &BuildSystem, diagnostics: &[Diagnostic]) {
     for d in diagnostics {
         emit_diagnostic(qctx, d);
     }
 }
 
-pub fn emit_diagnostic(qctx: &Query, d: &Diagnostic) {
+pub fn emit_diagnostic(qctx: &BuildSystem, d: &Diagnostic) {
     eprintln!("{}", d.to_string(qctx, true));
 }

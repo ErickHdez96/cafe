@@ -11,7 +11,7 @@ impl FileId {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SourceFile {
     pub id: FileId,
     pub path: PathBuf,

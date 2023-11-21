@@ -47,11 +47,17 @@ impl Color {
 pub struct Style {
     bold: bool,
     color: Option<Color>,
+    atty: bool,
 }
 
 impl Style {
     pub fn new() -> Self {
         Default::default()
+    }
+
+    pub fn atty(mut self, atty: bool) -> Self {
+        self.atty = atty;
+        self
     }
 
     pub fn bold(mut self) -> Self {
@@ -62,6 +68,21 @@ impl Style {
     pub fn color(mut self, color: Color) -> Self {
         self.color = Some(color);
         self
+    }
+
+    pub fn finish(self) -> impl Fn(&dyn fmt::Display) -> String {
+        move |o| {
+            if self.atty {
+                format!("{}{}{}", self, o, Self::new())
+            } else {
+                format!(
+                    "{}{}{}",
+                    if self.bold { "*" } else { "" },
+                    o,
+                    if self.bold { "*" } else { "" },
+                )
+            }
+        }
     }
 }
 

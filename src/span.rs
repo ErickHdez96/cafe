@@ -1,6 +1,6 @@
 use crate::file::FileId;
 
-#[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct Span {
     pub file_id: u16,
     pub offset: u32,
