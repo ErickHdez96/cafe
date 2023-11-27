@@ -10,7 +10,7 @@ use crate::{
 use super::{QCtx, Res};
 
 pub fn set_compiler_config(config: CompilerConfig) {
-    COMPILER_CONFIG.with(|c| *c.borrow_mut() = Rc::new(config))
+    COMPILER_CONFIG.with(|c| *c.borrow_mut() = Rc::new(config));
 }
 
 pub fn compiler_config_provider(_: &QCtx, _: ()) -> Rc<CompilerConfig> {

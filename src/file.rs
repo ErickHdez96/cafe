@@ -2,12 +2,21 @@ use std::{cell::Cell, path::PathBuf};
 
 use crate::span::{FilePosition, Span};
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct FileId(pub(crate) u16);
 
 impl FileId {
-    pub fn value(self) -> u16 {
-        self.0
+    pub const fn value(self) -> u16 {
+        self.0 & !(i16::MIN as u16)
+    }
+
+    pub const fn is_dummy(self) -> bool {
+        self.value() == 0
+    }
+
+    #[must_use]
+    pub const fn generated(self) -> Self {
+        Self(self.0 | (i16::MIN as u16))
     }
 }
 
@@ -22,9 +31,7 @@ fn new_id() -> FileId {
     FILE_ID.with(|file_id| {
         let id = file_id.get();
         let new_id = id + 1;
-        if new_id >= i16::MIN as u16 {
-            panic!("too many files");
-        }
+        assert!(new_id < i16::MIN as u16, "too many files");
         file_id.set(new_id);
         FileId(id)
     })
@@ -74,12 +81,12 @@ impl SourceFile {
             .unwrap_or_default();
         let end = self.contents[start..]
             .find('\n')
-            .map(|pos| start + pos)
-            .unwrap_or(self.contents.len());
+            .map_or(self.contents.len(), |pos| start + pos);
         &self.contents[start..end]
     }
 }
 
 thread_local! {
-    static FILE_ID: Cell<u16> = Cell::new(0);
+    // FILE_ID 0 is invalid
+    static FILE_ID: Cell<u16> = Cell::new(1);
 }

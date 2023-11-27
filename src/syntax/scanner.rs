@@ -110,7 +110,9 @@ pub fn tokenize_str(input: &str) -> Vec<Token> {
                     SK::Number
                 }
                 _ => {
-                    if !is_delimiter(c.peek()) {
+                    if is_delimiter(c.peek()) {
+                        SK::Error
+                    } else {
                         eat_till_delimiter(&mut c);
                         if is_open_delimiter(c.peek()) {
                             c.next();
@@ -118,24 +120,14 @@ pub fn tokenize_str(input: &str) -> Vec<Token> {
                         } else {
                             SK::Error
                         }
-                    } else {
-                        SK::Error
                     }
                 }
             },
-            '+' if c.peek().is_ascii_digit() => {
+            '+' | '-' if c.peek().is_ascii_digit() => {
                 eat_till_delimiter(&mut c);
                 SK::Number
             }
-            '+' => {
-                eat_till_delimiter(&mut c);
-                SK::Identifier
-            }
-            '-' if c.peek().is_ascii_digit() => {
-                eat_till_delimiter(&mut c);
-                SK::Number
-            }
-            '-' => {
+            '+' | '-' => {
                 eat_till_delimiter(&mut c);
                 SK::Identifier
             }

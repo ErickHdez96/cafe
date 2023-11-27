@@ -3,12 +3,12 @@ use std::rc::Rc;
 use crate::{
     config::ParserConfig,
     diagnostics::{Diagnostic, DiagnosticBuilder},
-    file::SourceFile,
-    parse_tree::{GreenNodeBuilder, GreenTree},
+    file::{FileId, SourceFile},
     span::Span,
 };
 
 use super::{
+    cst::{GreenNodeBuilder, GreenTree},
     scanner::{tokenize_str, Token},
     SyntaxKind,
 };
@@ -20,14 +20,14 @@ pub struct ParseResult {
 }
 
 pub fn parse_str(input: &str) -> ParseResult {
-    parse_str_with_config(input, 0, ParserConfig::default())
+    parse_str_with_config(input, FileId::default(), ParserConfig::default())
 }
 
 pub fn parse_source_file(file: &SourceFile, config: ParserConfig) -> ParseResult {
-    parse_str_with_config(&file.contents, file.id.value(), config)
+    parse_str_with_config(&file.contents, file.id, config)
 }
 
-pub fn parse_str_with_config(input: &str, file_id: u16, config: ParserConfig) -> ParseResult {
+pub fn parse_str_with_config(input: &str, file_id: FileId, config: ParserConfig) -> ParseResult {
     let mut p = Parser::new(input, config);
     p.file_id = file_id;
     p.parse();
@@ -45,7 +45,7 @@ struct Parser<'input> {
     builder: GreenNodeBuilder,
     diags: Vec<Diagnostic>,
     delim_stack: Vec<(Delim, Span)>,
-    file_id: u16,
+    file_id: FileId,
     config: ParserConfig,
     last_seen_token_span: Span,
 }
@@ -235,21 +235,20 @@ impl<'input> Parser<'input> {
         let (open_delim, open_delim_span) = self.delim_stack.pop().unwrap();
         let close_delim = {
             let t = self.peek();
-            match &t.kind {
-                SyntaxKind::CloseDelim => Delim::from(t.source),
-                _ => {
-                    let msg = format!("expected {}, found {}", open_delim.close(), t);
-                    self.err_sources(
-                        msg,
-                        vec![Diagnostic::builder()
-                            .hint()
-                            .msg("unclosed delimiter")
-                            .span(open_delim_span)
-                            .finish()],
-                    );
-                    self.bump();
-                    return;
-                }
+            if t.kind == SyntaxKind::CloseDelim {
+                Delim::from(t.source)
+            } else {
+                let msg = format!("expected {}, found {}", open_delim.close(), t);
+                self.err_sources(
+                    msg,
+                    vec![Diagnostic::builder()
+                        .hint()
+                        .msg("unclosed delimiter")
+                        .span(open_delim_span)
+                        .finish()],
+                );
+                self.bump();
+                return;
             }
         };
 
@@ -406,7 +405,7 @@ pub fn unicode_hex_escape_sequence(s: &str) -> Option<DiagnosticBuilder> {
     }
 }
 
-pub fn validate_identifier(s: &str, file_id: u16, offset: u32) -> Vec<DiagnosticBuilder> {
+pub fn validate_identifier(s: &str, file_id: FileId, offset: u32) -> Vec<DiagnosticBuilder> {
     let mut diags = vec![];
     match s.chars().next() {
         c @ Some('+') | c @ Some('.') | c @ Some('-') if s.chars().nth(1) != Some('>') => match s {
@@ -508,19 +507,47 @@ pub fn validate_char(s: &str) -> Option<DiagnosticBuilder> {
     } else {
         // Named character
         match s {
-            "nul" => None,
-            "alarm" => None,
-            "backspace" => None,
-            "tab" => None,
-            "linefeed" => None,
-            "newline" => None,
-            "vtab" => None,
-            "page" => None,
-            "return" => None,
-            "esc" => None,
-            "space" => None,
-            "delete" => None,
+            "nul" | "alarm" | "backspace" | "tab" | "linefeed" | "newline" | "vtab" | "page"
+            | "return" | "esc" | "space" | "delete" => None,
             _ => Some(Diagnostic::builder().msg("invalid character name")),
+        }
+    }
+}
+
+pub fn parse_unicode_hex_escape_sequence(s: &str) -> char {
+    u32::from_str_radix(s, 16)
+        .ok()
+        .and_then(char::from_u32)
+        .unwrap_or('\u{FFFD}')
+}
+
+pub fn parse_char(s: &str) -> char {
+    if s.len() <= 2 {
+        return '\0';
+    }
+    let s = &s[2..];
+
+    if s.chars().nth(1).is_none() {
+        // Simple case, one character
+        s.chars().next().unwrap_or_default()
+    } else if let Some(stripped) = s.strip_prefix('x') {
+        // Unicode characters
+        parse_unicode_hex_escape_sequence(stripped)
+    } else {
+        // Named character
+        match s {
+            "nul" => '\0',
+            "alarm" => '\u{7}',
+            "backspace" => '\u{8}',
+            "tab" => '\u{9}',
+            "linefeed" | "newline" => '\u{A}',
+            "vtab" => '\u{B}',
+            "page" => '\u{C}',
+            "return" => '\u{D}',
+            "esc" => '\u{1b}',
+            "space" => '\u{20}',
+            "delete" => '\u{7f}',
+            _ => '\u{FFFD}',
         }
     }
 }
@@ -1108,7 +1135,7 @@ mod tests {
                 ")",
                 vec![Diagnostic::builder()
                     .msg("unexpected closing delimiter")
-                    .span(Span::new(0, 0, 1))
+                    .span(Span::new(FileId::default(), 0, 1))
                     .finish()],
                 expect![[r#"
                     Root@0..1
@@ -1120,10 +1147,10 @@ mod tests {
                 "(",
                 vec![Diagnostic::builder()
                     .msg("expected ), found <eof>")
-                    .span(Span::new(0, 0, 1))
+                    .span(Span::new(FileId::default(), 0, 1))
                     .sources(vec![Diagnostic::builder()
                         .msg("unclosed delimiter")
-                        .span(Span::new(0, 0, 1))
+                        .span(Span::new(FileId::default(), 0, 1))
                         .hint()
                         .finish()])
                     .finish()],
@@ -1142,7 +1169,7 @@ mod tests {
                 vec![Diagnostic::builder()
                     .error()
                     .msg("braces not supported")
-                    .span(Span::new(0, 0, 1))
+                    .span(Span::new(FileId::default(), 0, 1))
                     .sources(vec![Diagnostic::builder()
                         .hint()
                         .msg("enable braces with --extended-syntax / --allow-braces")
@@ -1164,7 +1191,7 @@ mod tests {
                 vec![Diagnostic::builder()
                     .error()
                     .msg("expected a character, found <eof>")
-                    .span(Span::new(0, 0, 2))
+                    .span(Span::new(FileId::default(), 0, 2))
                     .finish()],
                 expect![[r##"
                     Root@0..2
@@ -1178,7 +1205,7 @@ mod tests {
                 vec![Diagnostic::builder()
                     .error()
                     .msg("invalid character name")
-                    .span(Span::new(0, 0, 7))
+                    .span(Span::new(FileId::default(), 0, 7))
                     .finish()],
                 expect![[r##"
                     Root@0..7
@@ -1192,7 +1219,7 @@ mod tests {
                 vec![Diagnostic::builder()
                     .error()
                     .msg("invalid character name")
-                    .span(Span::new(0, 0, 19))
+                    .span(Span::new(FileId::default(), 0, 19))
                     .finish()],
                 expect![[r##"
                     Root@0..19
@@ -1206,7 +1233,7 @@ mod tests {
                 vec![Diagnostic::builder()
                     .error()
                     .msg("invalid unicode hex escape sequence")
-                    .span(Span::new(0, 0, 7))
+                    .span(Span::new(FileId::default(), 0, 7))
                     .finish()],
                 expect![[r##"
                     Root@0..7
@@ -1220,7 +1247,7 @@ mod tests {
                 vec![Diagnostic::builder()
                     .error()
                     .msg("invalid unicode hex escape sequence")
-                    .span(Span::new(0, 0, 7))
+                    .span(Span::new(FileId::default(), 0, 7))
                     .finish()],
                 expect![[r##"
                     Root@0..7
@@ -1234,7 +1261,7 @@ mod tests {
                 vec![Diagnostic::builder()
                     .error()
                     .msg("invalid unicode hex escape sequence")
-                    .span(Span::new(0, 0, 9))
+                    .span(Span::new(FileId::default(), 0, 9))
                     .finish()],
                 expect![[r##"
                     Root@0..9
@@ -1248,7 +1275,7 @@ mod tests {
                 vec![Diagnostic::builder()
                     .error()
                     .msg("invalid hex scalar value")
-                    .span(Span::new(0, 0, 9))
+                    .span(Span::new(FileId::default(), 0, 9))
                     .finish()],
                 expect![[r##"
                     Root@0..9
@@ -1265,7 +1292,7 @@ mod tests {
                 vec![Diagnostic::builder()
                     .error()
                     .msg("identifiers cannot begin with +")
-                    .span(Span::new(0, 0, 2))
+                    .span(Span::new(FileId::default(), 0, 2))
                     .finish()],
                 expect![[r##"
                     Root@0..2
@@ -1279,7 +1306,7 @@ mod tests {
                 vec![Diagnostic::builder()
                     .error()
                     .msg("identifiers cannot begin with -")
-                    .span(Span::new(0, 0, 2))
+                    .span(Span::new(FileId::default(), 0, 2))
                     .finish()],
                 expect![[r##"
                     Root@0..2
@@ -1293,7 +1320,7 @@ mod tests {
                 vec![Diagnostic::builder()
                     .error()
                     .msg("identifiers cannot begin with .")
-                    .span(Span::new(0, 0, 2))
+                    .span(Span::new(FileId::default(), 0, 2))
                     .finish()],
                 expect![[r##"
                     Root@0..2
@@ -1307,7 +1334,7 @@ mod tests {
                 vec![Diagnostic::builder()
                     .error()
                     .msg("invalid hex scalar value")
-                    .span(Span::new(0, 1, 6))
+                    .span(Span::new(FileId::default(), 1, 6))
                     .finish()],
                 expect![[r##"
                     Root@0..10
@@ -1322,12 +1349,12 @@ mod tests {
                     Diagnostic::builder()
                         .error()
                         .msg("invalid hex scalar value")
-                        .span(Span::new(0, 1, 4))
+                        .span(Span::new(FileId::default(), 1, 4))
                         .finish(),
                     Diagnostic::builder()
                         .error()
                         .msg("invalid hex scalar value")
-                        .span(Span::new(0, 6, 4))
+                        .span(Span::new(FileId::default(), 6, 4))
                         .finish(),
                 ],
                 expect![[r##"
@@ -1342,7 +1369,7 @@ mod tests {
                 vec![Diagnostic::builder()
                     .error()
                     .msg("unterminated hex escape sequence")
-                    .span(Span::new(0, 0, 5))
+                    .span(Span::new(FileId::default(), 0, 5))
                     .finish()],
                 expect![[r##"
                     Root@0..5
@@ -1360,7 +1387,7 @@ mod tests {
                 vec![Diagnostic::builder()
                     .error()
                     .msg("invalid escape character")
-                    .span(Span::new(0, 1, 2))
+                    .span(Span::new(FileId::default(), 1, 2))
                     .finish()],
                 expect![[r##"
                     Root@0..4
@@ -1375,7 +1402,7 @@ mod tests {
         use super::*;
 
         fn check(input: &str, expected: Expect) {
-            let result = parse_str_with_config(input, 0, ParserConfig::extended());
+            let result = parse_str_with_config(input, FileId::default(), ParserConfig::extended());
             assert_eq!(Vec::<Diagnostic>::default(), result.diagnostics);
             expected.assert_debug_eq(&result.tree);
         }

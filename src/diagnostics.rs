@@ -85,7 +85,7 @@ impl Diagnostic {
             if pos.start_row == pos.end_row {
                 let _ = writeln!(out, "{} {}", " ".repeat(line_number_length), blue(&'|'));
                 let _ = write!(out, "{}", blue(&format!("{} |", pos.start_row + 1)));
-                let _ = writeln!(out, " {}", text);
+                let _ = writeln!(out, " {text}");
                 let _ = write!(out, "{} {} ", " ".repeat(line_number_length), blue(&'|'),);
                 let _ = write!(
                     out,

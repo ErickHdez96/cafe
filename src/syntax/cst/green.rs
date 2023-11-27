@@ -31,18 +31,17 @@ impl GreenNodeBuilder {
     }
 
     pub fn push_token(&mut self, kind: SyntaxKind, text: String) {
-        let tree = self.get_or_intern_tree(GreenTree::Token { kind, text });
+        let tree = self.get_or_intern_tree(GreenTree::token(kind, text));
         self.children.push(tree);
     }
 
     fn get_or_intern_tree(&mut self, green_tree: GreenTree) -> Rc<GreenTree> {
-        match self.cache.get(&green_tree) {
-            Some(v) => Rc::clone(v),
-            None => {
-                let value = Rc::new(green_tree.clone());
-                self.cache.insert(green_tree, Rc::clone(&value));
-                value
-            }
+        if let Some(v) = self.cache.get(&green_tree) {
+            Rc::clone(v)
+        } else {
+            let value = Rc::new(green_tree.clone());
+            self.cache.insert(green_tree, Rc::clone(&value));
+            value
         }
     }
 
@@ -53,60 +52,81 @@ impl GreenNodeBuilder {
             .expect("start_node and finish_node don't match");
         std::mem::swap(&mut self.sk, &mut kind);
         std::mem::swap(&mut self.children, &mut children);
-        let text_length = children.iter().map(|c| c.text_length()).sum();
-        self.get_or_intern_tree(GreenTree::Node {
-            kind,
-            text_length,
-            children,
-        })
+        self.get_or_intern_tree(GreenTree::node(kind, children))
     }
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum GreenTree {
-    Node {
-        kind: SyntaxKind,
-        text_length: usize,
-        children: Vec<Rc<GreenTree>>,
-    },
-    Token {
-        kind: SyntaxKind,
-        text: String,
-    },
+    Node(GreenNode),
+    Token(GreenToken),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct GreenNode {
+    kind: SyntaxKind,
+    text_length: usize,
+    children: Vec<Rc<GreenTree>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct GreenToken {
+    kind: SyntaxKind,
+    text: String,
 }
 
 impl GreenTree {
     pub fn node(kind: SyntaxKind, children: Vec<Rc<GreenTree>>) -> Self {
         let text_length = children.iter().map(|c| c.text_length()).sum();
-        Self::Node {
+        Self::Node(GreenNode {
             kind,
             text_length,
             children,
-        }
+        })
     }
 
     pub fn token(kind: SyntaxKind, text: String) -> Self {
-        Self::Token { kind, text }
+        Self::Token(GreenToken { kind, text })
+    }
+
+    pub const fn kind(&self) -> SyntaxKind {
+        match &self {
+            GreenTree::Node(GreenNode { kind, .. }) | GreenTree::Token(GreenToken { kind, .. }) => {
+                *kind
+            }
+        }
     }
 
     pub fn text_length(&self) -> usize {
         match &self {
-            GreenTree::Node { text_length, .. } => *text_length,
-            GreenTree::Token { text, .. } => text.len(),
+            GreenTree::Node(GreenNode { text_length, .. }) => *text_length,
+            GreenTree::Token(GreenToken { text, .. }) => text.len(),
         }
+    }
+}
+
+impl GreenNode {
+    pub fn children(&self) -> &[Rc<GreenTree>] {
+        &self.children
+    }
+}
+
+impl GreenToken {
+    pub fn text(&self) -> &str {
+        &self.text
     }
 }
 
 impl fmt::Display for GreenTree {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self {
-            GreenTree::Node { children, .. } => {
+            GreenTree::Node(GreenNode { children, .. }) => {
                 for c in children {
                     c.fmt(f)?;
                 }
                 Ok(())
             }
-            GreenTree::Token { text, .. } => text.fmt(f),
+            GreenTree::Token(GreenToken { text, .. }) => text.fmt(f),
         }
     }
 }
@@ -118,7 +138,7 @@ impl fmt::Debug for GreenTree {
             let mut precision = f.precision().unwrap_or_default();
             let padding = " ".repeat(width);
             match &self {
-                GreenTree::Node { kind, children, .. } => {
+                GreenTree::Node(GreenNode { kind, children, .. }) => {
                     write!(f, "{padding}{kind:?}@{precision}..{}", self.text_length())?;
                     if !children.is_empty() {
                         writeln!(f)?;
@@ -138,7 +158,7 @@ impl fmt::Debug for GreenTree {
                     }
                     Ok(())
                 }
-                GreenTree::Token { kind, text } => write!(
+                GreenTree::Token(GreenToken { kind, text }) => write!(
                     f,
                     "{padding}{kind:?}@{precision}..{} \"{text}\"",
                     precision + self.text_length()
@@ -146,21 +166,8 @@ impl fmt::Debug for GreenTree {
             }
         } else {
             match &self {
-                GreenTree::Node {
-                    kind,
-                    text_length,
-                    children,
-                } => f
-                    .debug_struct("GreenTree::Node")
-                    .field("kind", &kind)
-                    .field("text_length", &text_length)
-                    .field("children", &children)
-                    .finish(),
-                GreenTree::Token { kind, text } => f
-                    .debug_struct("GreenTree::Token")
-                    .field("kind", &kind)
-                    .field("text", &text)
-                    .finish(),
+                GreenTree::Node(node) => node.fmt(f),
+                GreenTree::Token(token) => token.fmt(f),
             }
         }
     }
@@ -242,18 +249,18 @@ mod tests {
         assert_eq!("(* (+ 1 1) (+ 1 1))", tree.to_string());
 
         match tree.as_ref() {
-            GreenTree::Node {
+            GreenTree::Node(GreenNode {
                 kind: SK::Root,
                 children,
                 ..
-            } => {
+            }) => {
                 assert_eq!(1, children.len());
                 match children[0].as_ref() {
-                    GreenTree::Node {
+                    GreenTree::Node(GreenNode {
                         kind: SK::List,
                         children,
                         ..
-                    } => {
+                    }) => {
                         assert_eq!(7, children.len());
                         // (+ 1 1)
                         assert!(Rc::ptr_eq(&children[3], &children[5]));
@@ -261,11 +268,11 @@ mod tests {
                         assert!(Rc::ptr_eq(&children[2], &children[4]));
 
                         match children[3].as_ref() {
-                            GreenTree::Node {
+                            GreenTree::Node(GreenNode {
                                 kind: SK::List,
                                 children: inner_children,
                                 ..
-                            } => {
+                            }) => {
                                 assert_eq!(7, inner_children.len());
                                 // 1
                                 assert!(Rc::ptr_eq(&inner_children[3], &inner_children[5]));

@@ -1,14 +1,16 @@
+use core::fmt;
+
 use crate::file::FileId;
 
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct Span {
-    pub file_id: u16,
+    pub file_id: FileId,
     pub offset: u32,
     pub len: u16,
 }
 
 impl Span {
-    pub const fn new(file_id: u16, offset: u32, len: u16) -> Self {
+    pub const fn new(file_id: FileId, offset: u32, len: u16) -> Self {
         Self {
             file_id,
             offset,
@@ -17,19 +19,36 @@ impl Span {
     }
 
     pub const fn file_id(self) -> FileId {
-        FileId(self.file_id & !(i16::MIN as u16))
+        self.file_id
     }
 
-    pub const fn dummy() -> Self {
+    pub fn dummy() -> Self {
         Self {
-            file_id: 0,
+            file_id: FileId::default(),
             offset: 0,
             len: 0,
         }
     }
 
     pub const fn is_dummy(self) -> bool {
-        self.file_id == 0 && self.offset == 0 && self.len == 0
+        self.file_id.is_dummy() && self.offset == 0 && self.len == 0
+    }
+
+    pub fn extend(self, other: Self) -> Self {
+        debug_assert!(self.file_id == other.file_id);
+        Self {
+            file_id: self.file_id,
+            offset: self.offset,
+            len: ((other.offset as usize + other.len as usize) - (self.offset as usize))
+                .try_into()
+                .unwrap(),
+        }
+    }
+}
+
+impl fmt::Display for Span {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}:{}..{}", self.file_id.value(), self.offset, self.len)
     }
 }
 
