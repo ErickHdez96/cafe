@@ -42,6 +42,7 @@ pub struct Diagnostic {
 }
 
 impl Diagnostic {
+    #[must_use]
     pub fn builder() -> DiagnosticBuilder {
         DiagnosticBuilder::default()
     }
@@ -127,36 +128,43 @@ impl Default for DiagnosticBuilder {
 }
 
 impl DiagnosticBuilder {
+    #[must_use]
     pub fn msg(mut self, msg: impl Into<String>) -> Self {
         self.msg = Some(msg.into());
         self
     }
 
+    #[must_use]
     pub fn error(mut self) -> Self {
         self.level = DiagnosticLevel::Error;
         self
     }
 
+    #[must_use]
     pub fn warn(mut self) -> Self {
         self.level = DiagnosticLevel::Warning;
         self
     }
 
+    #[must_use]
     pub fn hint(mut self) -> Self {
         self.level = DiagnosticLevel::Hint;
         self
     }
 
+    #[must_use]
     pub fn level(mut self, level: DiagnosticLevel) -> Self {
         self.level = level;
         self
     }
 
+    #[must_use]
     pub fn span(mut self, span: Span) -> Self {
         self.span = span;
         self
     }
 
+    #[must_use]
     pub fn sources(mut self, sources: Vec<Diagnostic>) -> Self {
         self.sources = sources;
         self

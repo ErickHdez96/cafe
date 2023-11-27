@@ -13,8 +13,9 @@ use crate::{
     },
 };
 
-use self::transformers::NativeSyntaxTransformer;
+use self::macros::NativeSyntaxTransformer;
 
+pub mod macros;
 pub mod scopes;
 pub mod transformers;
 
@@ -190,7 +191,7 @@ fn expand_list_expr(syn: &SynList, env: &Env<String, Binding>) -> (ast::Expr, Ve
                 }
             }
             SynExp::Symbol(s) => match resolve(s, env) {
-                res @ Some(Binding::Value { .. }) | res @ None => {
+                res @ (Some(Binding::Value { .. }) | None) => {
                     let (e, d) = expand_exprs(syn.sexps(), syn.span(), env);
                     (if res.is_some() { e } else { e.into_error() }, d)
                 }
@@ -466,12 +467,12 @@ fn or_transformer(syn: &SynList) -> Result<SynExp, Vec<Diagnostic>> {
                 FileId::default(),
             )
             .into();
-            let binding_ = green_list(vec![x.clone(), e.red().green().clone()]);
-            let bindings = green_list(vec![binding_.clone()]);
+            let binding = green_list(vec![x.clone(), e.red().green().clone()]);
+            let bindings = green_list(vec![binding.clone()]);
             let bindings_syn = SynList::raw(
                 &RedTree::new(&bindings),
                 vec![SynList::raw(
-                    &RedTree::new(&binding_),
+                    &RedTree::new(&binding),
                     vec![x_syn.clone(), e.clone()],
                     None,
                     FileId::default(),

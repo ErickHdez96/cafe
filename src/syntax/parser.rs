@@ -51,7 +51,7 @@ struct Parser<'input> {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq)]
-enum Delim {
+pub enum Delim {
     Paren,
     Bracket,
     Brace,
@@ -408,7 +408,7 @@ pub fn unicode_hex_escape_sequence(s: &str) -> Option<DiagnosticBuilder> {
 pub fn validate_identifier(s: &str, file_id: FileId, offset: u32) -> Vec<DiagnosticBuilder> {
     let mut diags = vec![];
     match s.chars().next() {
-        c @ Some('+') | c @ Some('.') | c @ Some('-') if s.chars().nth(1) != Some('>') => match s {
+        c @ Some('+' | '.' | '-') if s.chars().nth(1) != Some('>') => match s {
             "+" | "..." | "-" => {}
             _ => {
                 diags.push(
@@ -443,7 +443,7 @@ pub fn validate_identifier(s: &str, file_id: FileId, offset: u32) -> Vec<Diagnos
                                 )),
                         );
                     }
-                    start = current as i64;
+                    start = i64::from(current);
                     current += 2;
                 }
                 c => {

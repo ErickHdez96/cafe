@@ -37,6 +37,7 @@ impl<'p, K, V> Env<'p, K, V> {
         Self::default()
     }
 
+    #[must_use]
     pub fn enter_consume(self) -> Self {
         Self {
             parent: Some(Parent::Owned(Box::new(self))),
@@ -44,6 +45,7 @@ impl<'p, K, V> Env<'p, K, V> {
         }
     }
 
+    #[must_use]
     pub fn enter(&'p self) -> Env<'p, K, V> {
         Self {
             parent: Some(Parent::Ref(self)),

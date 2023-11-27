@@ -34,6 +34,7 @@ impl Span {
         self.file_id.is_dummy() && self.offset == 0 && self.len == 0
     }
 
+    #[must_use]
     pub fn extend(self, other: Self) -> Self {
         debug_assert!(self.file_id == other.file_id);
         Self {

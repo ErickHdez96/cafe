@@ -9,9 +9,6 @@ use crate::{
 
 use super::{expand_expr, scopes::Scope, Binding};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NativeSyntaxTransformer;
-
 pub fn if_core_transformer(
     syn: &SynList,
     env: &Env<String, Binding>,

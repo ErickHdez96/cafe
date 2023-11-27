@@ -28,6 +28,9 @@ impl fmt::Display for Token<'_> {
     }
 }
 
+/// Lexes a string into a vector of tokens. The scanner is based off of the r6rs specification,
+/// however it is very forgiving, to prevent returning errors. The parser must verify the tokens to
+/// emit the corresponding errors for invalid tokens.
 pub fn tokenize_str(input: &str) -> Vec<Token> {
     let mut c = Cursor {
         input: input.chars(),
@@ -39,10 +42,13 @@ pub fn tokenize_str(input: &str) -> Vec<Token> {
 
         // multi token
         macro_rules! mt {
+            // Single token, eat the token and return the syntax kind `$st`
             ($c:expr, $st:expr) => {{
                 $c.next();
                 $st
             }};
+            // Peeks the next char and test against `$tc`, if any of them match, evaluate `$tt`,
+            // otherwise returns `$st`
             ($c:expr, $st:expr; $(($tc:expr, $tt:expr));+) => {
                 match $c.peek() {
                     $($tc => { $c.next(); $tt })+
@@ -67,6 +73,7 @@ pub fn tokenize_str(input: &str) -> Vec<Token> {
                 if is_delimiter(c.peek()) {
                     SK::Dot
                 } else {
+                    // Parser validation required
                     eat_till_delimiter(&mut c);
                     SK::Identifier
                 }
@@ -79,6 +86,7 @@ pub fn tokenize_str(input: &str) -> Vec<Token> {
                     c.next();
                     mt!(c, SK::HashComma; ('@', SK::HashCommaAt))
                 }
+                // TODO: Implement datum comment
                 ';' => mt!(c, SK::DatumComment),
                 't' | 'T' if is_delimiter(c.peek_nth(1)) => mt!(c, SK::True),
                 'f' | 'F' if is_delimiter(c.peek_nth(1)) => mt!(c, SK::False),
@@ -87,6 +95,7 @@ pub fn tokenize_str(input: &str) -> Vec<Token> {
                     c.next();
                     // eat the character
                     c.next();
+                    // Parser validation required
                     eat_till_delimiter(&mut c);
                     SK::Char
                 }
@@ -96,9 +105,11 @@ pub fn tokenize_str(input: &str) -> Vec<Token> {
                 }
                 '!' => {
                     c.next();
+                    // script's shebang (e.g. '#!/usr/bin/env cafe')
                     if start == 0 {
                         eat_with_end_of_line(&mut c);
                     } else {
+                        // simple shebang (e.g. #!r6rs)
                         eat_till_delimiter(&mut c);
                     }
                     SK::Shebang
@@ -106,6 +117,7 @@ pub fn tokenize_str(input: &str) -> Vec<Token> {
                 // <prefix R> → <radix R> <exactness>
                 //            | <exactness> <radix R>
                 'b' | 'B' | 'o' | 'O' | 'd' | 'D' | 'x' | 'X' | 'i' | 'I' | 'e' | 'E' => {
+                    // Parser validation required
                     eat_till_delimiter(&mut c);
                     SK::Number
                 }
@@ -113,6 +125,8 @@ pub fn tokenize_str(input: &str) -> Vec<Token> {
                     if is_delimiter(c.peek()) {
                         SK::Error
                     } else {
+                        // handle #vu8(
+                        // Parser validation required
                         eat_till_delimiter(&mut c);
                         if is_open_delimiter(c.peek()) {
                             c.next();
@@ -124,18 +138,22 @@ pub fn tokenize_str(input: &str) -> Vec<Token> {
                 }
             },
             '+' | '-' if c.peek().is_ascii_digit() => {
+                // Parser validation required
                 eat_till_delimiter(&mut c);
                 SK::Number
             }
             '+' | '-' => {
+                // Parser validation required
                 eat_till_delimiter(&mut c);
                 SK::Identifier
             }
             '"' => {
+                // Parser validation required
                 eat_string(&mut c);
                 SK::String
             }
             i if i.is_ascii_digit() => {
+                // Parser validation required
                 eat_till_delimiter(&mut c);
                 SK::Number
             }
@@ -144,6 +162,7 @@ pub fn tokenize_str(input: &str) -> Vec<Token> {
                 eat_till_delimiter(&mut c);
                 SK::Identifier
             }
+            // Parser validation required
             '\\' if c.peek() == 'x' || c.peek() == 'X' => {
                 eat_till_delimiter(&mut c);
                 // eat_till_delimiter starts eating at 'x' and will stop at ;

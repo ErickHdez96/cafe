@@ -12,7 +12,10 @@ use crate::{
     span::Span,
 };
 
-use super::{parser::parse_char, SyntaxKind};
+use super::{
+    parser::{parse_char, Delim},
+    SyntaxKind,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SynRoot {
@@ -263,6 +266,36 @@ impl SynList {
             self.file_id(),
             self.red.offset().try_into().unwrap(),
             self.red.green().text_length().try_into().unwrap(),
+        )
+    }
+
+    pub fn close_delim_char(&self) -> char {
+        match self.red.green().as_ref() {
+            GreenTree::Node(n) => match n.children().iter().find_map(|c| match c.as_ref() {
+                GreenTree::Token(tok)
+                    if tok.kind() == SyntaxKind::OpenDelim
+                        || tok.kind() == SyntaxKind::SpecialOpenDelim =>
+                {
+                    Some(tok.text())
+                }
+                _ => None,
+            }) {
+                Some(d) => Delim::from(d).close(),
+                None => panic!("expected an open delimiter child"),
+            },
+            GreenTree::Token(_) => panic!("expected a node"),
+        }
+    }
+
+    pub fn close_delim_span(&self) -> Span {
+        let children = RedTree::children(&self.red);
+        let red = children
+            .last()
+            .expect("list must have at least one element");
+        Span::new(
+            self.file_id(),
+            red.offset().try_into().unwrap(),
+            red.green().text_length().try_into().unwrap(),
         )
     }
 

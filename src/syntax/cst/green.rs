@@ -106,6 +106,10 @@ impl GreenTree {
 }
 
 impl GreenNode {
+    pub const fn kind(&self) -> SyntaxKind {
+        self.kind
+    }
+
     pub fn children(&self) -> &[Rc<GreenTree>] {
         &self.children
     }
@@ -114,6 +118,10 @@ impl GreenNode {
 impl GreenToken {
     pub fn text(&self) -> &str {
         &self.text
+    }
+
+    pub const fn kind(&self) -> SyntaxKind {
+        self.kind
     }
 }
 

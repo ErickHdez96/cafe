@@ -52,7 +52,7 @@ pub struct Style {
 
 impl Style {
     pub fn new() -> Self {
-        Default::default()
+        Self::default()
     }
 
     pub fn atty(mut self, atty: bool) -> Self {
