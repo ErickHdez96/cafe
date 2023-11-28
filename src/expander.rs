@@ -32,19 +32,23 @@ pub enum Binding {
     },
     CoreDefTransformer {
         scopes: Scopes,
+        name: String,
         transformer: CoreDefTransformer,
     },
     CoreExprTransformer {
         scopes: Scopes,
+        name: String,
         transformer: CoreExprTransformer,
     },
     SyntaxTransformer {
         scopes: Scopes,
+        name: String,
         transformer: SyntaxTransformer,
     },
     NativeSyntaxTransformer {
         scopes: Scopes,
-        transformer: NativeSyntaxTransformer,
+        name: String,
+        transformer: Rc<NativeSyntaxTransformer>,
     },
 }
 
@@ -63,6 +67,18 @@ impl Binding {
             id.set(old.saturating_add(1));
             old
         })
+    }
+
+    pub fn name(&self) -> &str {
+        match self {
+            Binding::Value {
+                name, orig_name, ..
+            } => name.as_ref().unwrap_or(orig_name),
+            Binding::CoreDefTransformer { name, .. }
+            | Binding::CoreExprTransformer { name, .. }
+            | Binding::SyntaxTransformer { name, .. }
+            | Binding::NativeSyntaxTransformer { name, .. } => name,
+        }
     }
 
     pub fn scopes(&self) -> &Scopes {
@@ -543,6 +559,7 @@ mod tests {
             String::from("lambda"),
             Binding::CoreExprTransformer {
                 scopes: Scopes::core(),
+                name: String::from("lambda"),
                 transformer: lambda_core_transformer,
             },
         );
@@ -550,6 +567,7 @@ mod tests {
             String::from("if"),
             Binding::CoreExprTransformer {
                 scopes: Scopes::core(),
+                name: String::from("if"),
                 transformer: if_core_transformer,
             },
         );
@@ -566,6 +584,7 @@ mod tests {
             String::from("let"),
             Binding::SyntaxTransformer {
                 scopes: Scopes::core(),
+                name: String::from("let"),
                 transformer: let_transformer,
             },
         );
@@ -573,6 +592,7 @@ mod tests {
             String::from("or"),
             Binding::SyntaxTransformer {
                 scopes: Scopes::core(),
+                name: String::from("or"),
                 transformer: or_transformer,
             },
         );

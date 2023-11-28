@@ -2,13 +2,19 @@ use std::{collections::HashMap, fmt};
 
 use crate::{
     diagnostics::Diagnostic,
+    env::Env,
     span::Span,
     syntax::cst::{SynBoolean, SynChar, SynExp, SynList, SynSymbol},
 };
 
+use super::{resolve, Binding};
+
 const INDENTATION_WIDTH: usize = 2;
 
-pub fn compile_syntax_rules(syn: &SynList) -> (NativeSyntaxTransformer, Vec<Diagnostic>) {
+pub fn compile_syntax_rules(
+    syn: &SynList,
+    env: &Env<String, Binding>,
+) -> (NativeSyntaxTransformer, Vec<Diagnostic>) {
     let mut syns = syn.sexps().iter();
     let mut diags = vec![];
     syns.next().expect("expected syntax-rules");
@@ -39,7 +45,7 @@ pub fn compile_syntax_rules(syn: &SynList) -> (NativeSyntaxTransformer, Vec<Diag
 
     let mut rules = vec![];
     for s in syns {
-        let (rule, ds) = compile_syntax_rule(s);
+        let (rule, ds) = compile_syntax_rule(s, env);
         diags.extend(ds);
         if let Some(rule) = rule {
             rules.push(rule);
@@ -49,7 +55,10 @@ pub fn compile_syntax_rules(syn: &SynList) -> (NativeSyntaxTransformer, Vec<Diag
     (NativeSyntaxTransformer { rules }, diags)
 }
 
-fn compile_syntax_rule(syn: &SynExp) -> (Option<(Pattern, Template)>, Vec<Diagnostic>) {
+fn compile_syntax_rule(
+    syn: &SynExp,
+    env: &Env<String, Binding>,
+) -> (Option<(Pattern, Template)>, Vec<Diagnostic>) {
     let mut diags = vec![];
     let (srpattern_syn, template_syn) = match syn {
         SynExp::List(l) => {
@@ -100,7 +109,7 @@ fn compile_syntax_rule(syn: &SynExp) -> (Option<(Pattern, Template)>, Vec<Diagno
     // TODO: Fix (syntax-rules () [#t #t])
     let (pattern, ds) = compile_pattern(srpattern_syn);
     diags.extend(ds);
-    let (template, ds) = compile_template(template_syn, &pattern);
+    let (template, ds) = compile_template(template_syn, &pattern, env);
     diags.extend(ds);
 
     (Some((pattern, template)), diags)
@@ -146,7 +155,11 @@ fn do_compile_pattern(syn: SynExp, _diags: &mut Vec<Diagnostic>) -> Pattern {
     }
 }
 
-pub fn compile_template(syn: &SynExp, pat: &Pattern) -> (Template, Vec<Diagnostic>) {
+pub fn compile_template(
+    syn: &SynExp,
+    pat: &Pattern,
+    env: &Env<String, Binding>,
+) -> (Template, Vec<Diagnostic>) {
     let mut diags = vec![];
     let (vars, repeated_vars) = pat.variables();
     for (v, span) in repeated_vars {
@@ -157,7 +170,7 @@ pub fn compile_template(syn: &SynExp, pat: &Pattern) -> (Template, Vec<Diagnosti
                 .finish(),
         );
     }
-    let t = do_compile_template(syn, &vars, &mut diags, 0);
+    let t = do_compile_template(syn, &vars, &mut diags, 0, env);
     (t, diags)
 }
 
@@ -166,6 +179,7 @@ fn do_compile_template(
     vars: &HashMap<String, usize>,
     diags: &mut Vec<Diagnostic>,
     unrepeat: usize,
+    env: &Env<String, Binding>,
 ) -> Template {
     match syn {
         SynExp::List(l) if l.sexps.is_empty() => Template::List(vec![], l.span()),
@@ -189,9 +203,9 @@ fn do_compile_template(
                 }
 
                 if new_unrepeat == unrepeat {
-                    templates.push(do_compile_template(s, vars, diags, unrepeat));
+                    templates.push(do_compile_template(s, vars, diags, unrepeat, env));
                 } else {
-                    let mut t = do_compile_template(s, vars, diags, new_unrepeat);
+                    let mut t = do_compile_template(s, vars, diags, new_unrepeat, env);
                     for span in spans {
                         t = Template::Splice(Box::new(t), s.span().extend(span));
                         new_unrepeat -= 1;
@@ -221,23 +235,44 @@ fn do_compile_template(
                     Template::Error(syn.clone(), v.span())
                 }
                 // TODO: Validate in environment
-                None => Template::Constant(syn.clone()),
+                None => {
+                    let binding = resolve(v, env);
+                    if let Some(b) = binding {
+                        Template::Binding(b.clone(), v.span())
+                    } else {
+                        Template::Constant(syn.clone())
+                    }
+                }
             }
         }
         SynExp::Boolean(_) | SynExp::Char(_) => Template::Constant(syn.clone()),
     }
 }
 
+/// Emits diagnostics for all the invalid splicing `...` operators.
+///
+/// ```text
+/// (syntax-rules () [(_ e) (e ...)])
+/// (syntax-rules () [(_ e) ((e) ...)])
+/// (syntax-rules () [(_ e0 e ...) (e0 (e ...) ...)])
+/// ```
+///
+/// The return value is for internal purposes. Returns true if there is a variable where its
+/// repetition count and the splicing count match.
 fn validate_splice(
     template: &Template,
     vars: &HashMap<String, usize>,
     diags: &mut Vec<Diagnostic>,
     unrepeat: usize,
+    // `true` if we're directly iterating over elements of a list. `false` if we're at the root of
+    // the template or under a splice operator.
     in_list: bool,
-) {
+) -> bool {
     match &template {
+        // direct splice operator over variables `e ...`
         Template::Variable(v, span) if !in_list => {
             if let Some(&repeat) = vars.get(v) {
+                // Variables that are still repeating are handled above
                 if repeat < unrepeat {
                     diags.push(
                         Diagnostic::builder()
@@ -246,13 +281,42 @@ fn validate_splice(
                             .finish(),
                     );
                 }
+                repeat >= unrepeat
+            } else {
+                false
             }
         }
-        Template::Variable(_, _) => todo!(),
-        Template::List(_, _) => todo!(),
-        Template::Splice(t, _) => validate_splice(t, vars, diags, unrepeat + 1, in_list),
-        Template::Constant(_) => todo!(),
-        Template::Error(_, _) => todo!(),
+        Template::Variable(v, _) => {
+            if let Some(&repeat) = vars.get(v) {
+                // Variables that are still repeating are handled above
+                repeat >= unrepeat
+            } else {
+                false
+            }
+        }
+        Template::List(elems, span) => {
+            let res = elems
+                .iter()
+                .all(|cur| validate_splice(cur, vars, diags, unrepeat, true));
+            match (in_list, res) {
+                (false, false) => {
+                    // We are either at the root or under a splice operator and didn't use up all
+                    // the splice operations
+                    diags.push(
+                        Diagnostic::builder()
+                            .msg("no variable is repeating at this point")
+                            .span(*span)
+                            .finish(),
+                    );
+                    false
+                }
+                (_, res) => res,
+            }
+        }
+        Template::Splice(t, _) => validate_splice(t, vars, diags, unrepeat + 1, false),
+        Template::Binding(_, _) => false,
+        Template::Constant(_) => false,
+        Template::Error(_, _) => false,
     }
 }
 
@@ -431,6 +495,7 @@ pub enum Template {
     Constant(SynExp),
     /// `e`
     Variable(String, Span),
+    Binding(Binding, Span),
     /// `( a b c )`
     List(Vec<Template>, Span),
     /// `a ...` `(a) ...`
@@ -446,6 +511,9 @@ impl fmt::Debug for Template {
             match self {
                 Template::Constant(c) => write!(f, "{padding}constant - {c} @{}", c.span()),
                 Template::Variable(v, span) => write!(f, "{padding}variable - {v} @{span}"),
+                Template::Binding(b, span) => {
+                    write!(f, "{padding}captured-binding - {} @{span}", b.name())
+                }
                 Template::List(templs, span) => write!(
                     f,
                     "{padding}list@{span}{}",
@@ -477,6 +545,11 @@ impl fmt::Debug for Template {
                     .field(&v)
                     .field(&span)
                     .finish(),
+                Template::Binding(b, span) => f
+                    .debug_tuple("Template::Binding")
+                    .field(&b)
+                    .field(&span)
+                    .finish(),
                 Template::List(elems, span) => f
                     .debug_tuple("Template::List")
                     .field(&elems)
@@ -502,11 +575,44 @@ mod tests {
     use expect_test::{expect, Expect};
 
     use crate::{
+        expander::{
+            scopes::Scopes,
+            transformers::{if_core_transformer, lambda_core_transformer},
+        },
         file::FileId,
         syntax::{cst::SynRoot, parser::parse_str},
     };
 
     use super::*;
+
+    fn root_env() -> Env<'static, String, Binding> {
+        let mut core = Env::new();
+        core.insert(
+            String::from("lambda"),
+            Binding::CoreExprTransformer {
+                scopes: Scopes::core(),
+                name: String::from("lambda"),
+                transformer: lambda_core_transformer,
+            },
+        );
+        core.insert(
+            String::from("if"),
+            Binding::CoreExprTransformer {
+                scopes: Scopes::core(),
+                name: String::from("if"),
+                transformer: if_core_transformer,
+            },
+        );
+        core.insert(
+            String::from("cons"),
+            Binding::Value {
+                scopes: Scopes::core(),
+                orig_name: String::from("cons"),
+                name: None,
+            },
+        );
+        core.enter_consume()
+    }
 
     mod patterns {
         use super::*;
@@ -677,7 +783,7 @@ mod tests {
                 .list()
                 .unwrap()
                 .clone();
-            let (pattern, errs) = compile_syntax_rules(&syn);
+            let (pattern, errs) = compile_syntax_rules(&syn, &root_env());
             assert_eq!(errs, vec![]);
             expected.assert_debug_eq(&pattern);
         }
@@ -733,25 +839,27 @@ mod tests {
         #[test]
         fn simple_repeat() {
             check(
-                "(syntax-rules () [(when cond body0 body ...) (if cond (begin body0 body ...))])",
+                "(syntax-rules ()
+                   [(when cond body0 body ...)
+                     (if cond (begin body0 body ...))])",
                 expect![[r#"
                     rules:
                     - pattern:
-                        list@0:18..26
-                          when@0:19..4
-                          cond@0:24..4
-                          body0@0:29..5
-                          repeat@0:35..8
-                            body@0:35..4
+                        list@0:37..26
+                          when@0:38..4
+                          cond@0:43..4
+                          body0@0:48..5
+                          repeat@0:54..8
+                            body@0:54..4
                       template:
-                        list@0:45..32
-                          constant - if @0:46..2
-                          variable - cond @0:49..4
-                          list@0:54..22
-                            constant - begin @0:55..5
-                            variable - body0 @0:61..5
-                            splice@0:67..8
-                              variable - body @0:67..4
+                        list@0:85..32
+                          captured-binding - if @0:86..2
+                          variable - cond @0:89..4
+                          list@0:94..22
+                            constant - begin @0:95..5
+                            variable - body0 @0:101..5
+                            splice@0:107..8
+                              variable - body @0:107..4
                 "#]],
             );
         }
@@ -778,6 +886,44 @@ mod tests {
                 "#]],
             );
         }
+
+        #[test]
+        fn let_() {
+            check(
+                "(syntax-rules ()
+                   [(let ((v e) ...) body0 body ...)
+                     ((lambda (v ...)
+                       body0
+                       body ...)
+                      e ...)])",
+                expect![[r#"
+                    rules:
+                    - pattern:
+                        list@0:37..32
+                          let@0:38..3
+                          list@0:42..11
+                            repeat@0:43..9
+                              list@0:43..5
+                                v@0:44..1
+                                e@0:46..1
+                          body0@0:54..5
+                          repeat@0:60..8
+                            body@0:60..4
+                      template:
+                        list@0:91..107
+                          list@0:92..77
+                            captured-binding - lambda @0:93..6
+                            list@0:100..7
+                              splice@0:101..5
+                                variable - v @0:101..1
+                            variable - body0 @0:131..5
+                            splice@0:160..8
+                              variable - body @0:160..4
+                          splice@0:192..5
+                            variable - e @0:192..1
+                "#]],
+            );
+        }
     }
 
     mod errors {
@@ -794,7 +940,7 @@ mod tests {
                 .list()
                 .unwrap()
                 .clone();
-            let (_, errs) = compile_syntax_rules(&syn);
+            let (_, errs) = compile_syntax_rules(&syn, &root_env());
             assert_eq!(errs, errors);
         }
 
@@ -810,13 +956,12 @@ mod tests {
         }
 
         #[test]
-        #[ignore]
         fn splice_list_no_repeating_variable() {
             check_errors(
                 "(syntax-rules () [(_ e) ((e) ...)])",
                 vec![Diagnostic::builder()
-                    .msg("variable e not repeating at this point")
-                    .span(Span::new(FileId::default(), 25, 1))
+                    .msg("no variable is repeating at this point")
+                    .span(Span::new(FileId::default(), 25, 3))
                     .finish()],
             );
         }
