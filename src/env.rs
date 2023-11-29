@@ -147,6 +147,14 @@ where
             .or_else(|| self.parent.as_ref().and_then(|p| p.get(k)))
     }
 
+    pub fn get_immediate<Q: ?Sized>(&self, k: &Q) -> Option<&V>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq,
+    {
+        self.bindings.get(k)
+    }
+
     pub fn get_all<Q: ?Sized>(&self, k: &Q) -> Vec<&V>
     where
         K: Borrow<Q>,

@@ -132,6 +132,13 @@ impl SynExp {
         }
     }
 
+    pub fn list(&self) -> Option<&SynList> {
+        match &self {
+            SynExp::List(l) => Some(l),
+            SynExp::Boolean(_) | SynExp::Char(_) | SynExp::Symbol(_) => None,
+        }
+    }
+
     pub fn into_list(self) -> Result<SynList, Self> {
         match self {
             SynExp::List(l) => Ok(l),
@@ -150,6 +157,13 @@ impl SynExp {
         match self {
             SynExp::Char(c) => Some(c),
             SynExp::Boolean(_) | SynExp::List(_) | SynExp::Symbol(_) => None,
+        }
+    }
+
+    pub fn symbol(&self) -> Option<&SynSymbol> {
+        match &self {
+            SynExp::Symbol(s) => Some(s),
+            SynExp::Char(_) | SynExp::Boolean(_) | SynExp::List(_) => None,
         }
     }
 

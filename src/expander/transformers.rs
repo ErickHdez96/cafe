@@ -1,16 +1,117 @@
 use crate::{
     env::Env,
     syntax::{
-        ast::{self, ModuleName},
+        ast::{self, Module, ModuleName},
         cst::{SynExp, SynList, SynSymbol},
     },
 };
 
 use super::{scopes::Scope, Binding, Expander};
 
+pub fn module(expander: &mut Expander, syn: SynList) {
+    let syn_span = syn.span();
+    let close_delim_char = syn.close_delim_char();
+    let close_delim_span = syn.close_delim_span();
+    let (sexps, _) = syn.into_parts();
+    let mut sexps = sexps.into_iter();
+
+    let name = if let Some(sexp) = sexps.nth(1) {
+        if let Some(name) = parse_module_name(expander, sexp) {
+            name
+        } else {
+            return;
+        }
+    } else {
+        expander.emit_error(|b| {
+            b.msg(format!("expected a module name, found {close_delim_char}"))
+                .span(close_delim_span)
+        });
+        return;
+    };
+
+    let mut exports = vec![];
+    if let Some(SynExp::List(l)) = sexps.next() {
+        let (sexps, _) = l.into_parts();
+        for e in sexps {
+            match e.into_symbol() {
+                Ok(s) => {
+                    exports.push((s.value().to_string(), s.span()));
+                }
+                Err(s) => {
+                    expander.emit_error(|b| {
+                        b.msg(format!("expected an identifier, found {s}"))
+                            .span(close_delim_span)
+                    });
+                }
+            }
+        }
+    } else {
+        expander.emit_error(|b| {
+            b.msg(format!(
+                "expected a list of exported identifiers, found {close_delim_char}"
+            ))
+            .span(close_delim_span)
+        });
+    }
+
+    let root_scope = Scope::new();
+    let mut bindings = Env::new();
+    let mut deferred = vec![];
+    let intrinsics = (expander.import)(ModuleName {
+        paths: vec![
+            String::from("cafe"),
+            String::from("expander"),
+            String::from("intrinsics"),
+        ],
+        versions: vec![],
+    })
+    .unwrap();
+    for (v, b) in intrinsics.bindings.bindings() {
+        bindings.insert(v.clone(), b.clone());
+    }
+
+    for i in sexps {
+        if let Some(def) = expander.expand_macro(i.with_scope(root_scope), &mut bindings) {
+            deferred.push(def);
+        }
+    }
+
+    let mut items = vec![];
+
+    for d in deferred {
+        if let Some(item) = expander.expand_item(d, &bindings) {
+            items.push(item);
+        }
+    }
+
+    let mut exported_bindings = Env::new();
+    for (e, span) in exports {
+        match bindings.get_immediate(&e) {
+            Some(b) => {
+                exported_bindings.insert(e, b.clone());
+            }
+            None => {
+                expander.emit_error(|b| {
+                    b.msg(format!("tried to export undefined variable {e}"))
+                        .span(span)
+                });
+            }
+        }
+    }
+
+    (expander.register)(
+        name.clone(),
+        Module {
+            span: syn_span,
+            name,
+            items,
+            exports: exported_bindings,
+            bindings: Env::with_bindings(bindings.into_bindings()),
+        },
+    )
+}
+
 pub fn import(expander: &mut Expander, syn: SynList, env: &mut Env<String, Binding>) {
-    let mut paths = vec![];
-    let versions = vec![];
     let syn_span = syn.span();
     let close_delim_char = syn.close_delim_char();
     let close_delim_span = syn.close_delim_span();
@@ -18,8 +119,43 @@ pub fn import(expander: &mut Expander, syn: SynList, env: &mut Env<String, Bindi
     let mut sexps = sexps.into_iter();
     assert!(sexps.next().is_some());
 
-    match sexps.next() {
-        Some(SynExp::List(l)) => {
+    let name = if let Some(sexp) = sexps.next() {
+        if let Some(name) = parse_module_name(expander, sexp) {
+            name
+        } else {
+            return;
+        }
+    } else {
+        expander.emit_error(|b| {
+            b.msg(format!("expected a module name, found {close_delim_char}"))
+                .span(close_delim_span)
+        });
+        return;
+    };
+
+    match (expander.import)(name) {
+        Ok(i) => {
+            for (v, b) in i.bindings.bindings() {
+                if env.has_immediate(v) {
+                    expander.emit_error(|b| {
+                        b.msg(format!("variable {} already bound", v))
+                            .span(syn_span)
+                    });
+                } else {
+                    env.insert(v.clone(), b.clone());
+                }
+            }
+        }
+        Err(d) => {
+            expander.diagnostics.push(d);
+        }
+    }
+}
+
+fn parse_module_name(expander: &mut Expander, syn: SynExp) -> Option<ModuleName> {
+    match syn {
+        SynExp::List(l) => {
+            let mut paths = vec![];
             for sy in l.sexps() {
                 match sy {
                     SynExp::Symbol(s) => paths.push(String::from(s.value())),
@@ -36,36 +172,17 @@ pub fn import(expander: &mut Expander, syn: SynList, env: &mut Env<String, Bindi
                     }
                 }
             }
+            Some(ModuleName {
+                paths,
+                versions: vec![],
+            })
         }
         sexp => {
             expander.emit_error(|b| {
-                b.msg(format!(
-                    "expected a module name, found {}",
-                    sexp.as_ref()
-                        .map(ToString::to_string)
-                        .unwrap_or_else(|| close_delim_char.to_string())
-                ))
-                .span(close_delim_span)
+                b.msg(format!("expected a module name, found {sexp}"))
+                    .span(sexp.span())
             });
-            return;
-        }
-    }
-
-    match (expander.import)(ModuleName { paths, versions }) {
-        Ok(i) => {
-            for (v, b) in dbg!(i.bindings.bindings()) {
-                if env.has_immediate(v) {
-                    expander.emit_error(|b| {
-                        b.msg(format!("variable {} already bound", v))
-                            .span(syn_span)
-                    });
-                } else {
-                    env.insert(v.clone(), b.clone());
-                }
-            }
-        }
-        Err(d) => {
-            expander.diagnostics.push(d);
+            None
         }
     }
 }
@@ -238,4 +355,48 @@ fn lambda_formals<'a>(
             (vec![], None)
         }
     }
+}
+
+pub fn define_core_transformer(
+    expander: &mut Expander,
+    syn: SynList,
+    env: &Env<String, Binding>,
+) -> Option<ast::Define> {
+    let span = syn.span();
+    let close_delim_char = syn.close_delim_char();
+    let close_delim_span = syn.close_delim_span();
+    let (sexps, _) = syn.into_parts();
+    let mut children = sexps.into_iter();
+    children.next();
+
+    let name = match children.next() {
+        Some(SynExp::Symbol(sy)) => {
+            // env should already have the binding to the variable
+            ast::Ident {
+                span: sy.span(),
+                value: sy.value().to_string(),
+            }
+        }
+        _ => {
+            expander.emit_error(|b| {
+                b.msg(format!(
+                    "expected an identifier or a list, found {}",
+                    close_delim_char
+                ))
+                .span(close_delim_span)
+            });
+            return None;
+        }
+    };
+
+    let expr = children.next().map(|c| expander.expand_expr(c, env));
+
+    if let Some(c) = children.next() {
+        expander.emit_error(|b| {
+            b.msg(format!("expected {}, found {}", close_delim_char, c))
+                .span(close_delim_span)
+        });
+    }
+
+    Some(ast::Define { span, name, expr })
 }

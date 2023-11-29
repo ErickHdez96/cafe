@@ -13,13 +13,16 @@ use crate::{
     },
 };
 
-use self::{macros::NativeSyntaxTransformer, transformers::import};
+use self::{
+    macros::NativeSyntaxTransformer,
+    transformers::{import, module},
+};
 
 pub mod macros;
 pub mod scopes;
 pub mod transformers;
 
-type CoreDefTransformer = fn(&mut Expander, SynList, &Env<String, Binding>) -> ast::Expr;
+type CoreDefTransformer = fn(&mut Expander, SynList, &Env<String, Binding>) -> Option<ast::Define>;
 type CoreExprTransformer = fn(&mut Expander, SynList, &Env<String, Binding>) -> ast::Expr;
 type SyntaxTransformer = fn(SynList) -> Result<SynExp, Vec<Diagnostic>>;
 
@@ -31,6 +34,7 @@ pub struct ExpanderResult {
 
 pub struct Expander<'i> {
     import: &'i dyn Fn(ModuleName) -> Result<Rc<ModuleInterface>, Diagnostic>,
+    register: &'i dyn Fn(ModuleName, Module),
     diagnostics: Vec<Diagnostic>,
 }
 
@@ -51,6 +55,9 @@ pub enum Binding {
         name: Option<String>,
     },
     Import {
+        scopes: Scopes,
+    },
+    Module {
         scopes: Scopes,
     },
     CoreDefTransformer {
@@ -95,6 +102,7 @@ impl Binding {
     pub fn name(&self) -> &str {
         match self {
             Binding::Import { .. } => "import",
+            Binding::Module { .. } => "module",
             Binding::Value {
                 name, orig_name, ..
             } => name.as_ref().unwrap_or(orig_name),
@@ -109,6 +117,7 @@ impl Binding {
         match self {
             Binding::Value { scopes, .. }
             | Binding::Import { scopes }
+            | Binding::Module { scopes }
             | Binding::CoreDefTransformer { scopes, .. }
             | Binding::CoreExprTransformer { scopes, .. }
             | Binding::SyntaxTransformer { scopes, .. }
@@ -120,6 +129,7 @@ impl Binding {
         match self {
             Binding::Value { ref mut scopes, .. }
             | Binding::Import { ref mut scopes }
+            | Binding::Module { ref mut scopes }
             | Binding::CoreDefTransformer { ref mut scopes, .. }
             | Binding::CoreExprTransformer { ref mut scopes, .. }
             | Binding::SyntaxTransformer { ref mut scopes, .. }
@@ -137,12 +147,51 @@ pub fn expand_root(
     syn: SynRoot,
     base_env: &Env<'_, String, Binding>,
     import: impl Fn(ModuleName) -> Result<Rc<ModuleInterface>, Diagnostic>,
+    register: impl Fn(ModuleName, Module),
 ) -> ExpanderResult {
     let mut expander = Expander {
         import: &import,
+        register: &register,
         diagnostics: vec![],
     };
+
+    let name = ModuleName {
+        paths: vec![
+            String::from("cafe"),
+            String::from("expander"),
+            String::from("intrinsics"),
+        ],
+        versions: vec![],
+    };
+    (expander.register)(
+        name.clone(),
+        Module {
+            span: Span::dummy(),
+            name,
+            items: vec![],
+            exports: intrinsics_env(),
+            bindings: Env::default(),
+        },
+    );
+
     expander.expand_root(syn, base_env)
+}
+
+fn intrinsics_env() -> Env<'static, String, Binding> {
+    let mut env = Env::default();
+    env.insert(
+        String::from("import"),
+        Binding::Import {
+            scopes: Scopes::core(),
+        },
+    );
+    env.insert(
+        String::from("module"),
+        Binding::Module {
+            scopes: Scopes::core(),
+        },
+    );
+    env
 }
 
 impl Expander<'_> {
@@ -150,17 +199,29 @@ impl Expander<'_> {
         let root_scope = Scope::new();
         let mut bindings = base_env.enter();
         let mut deferred = vec![];
+        let intrinsics = (self.import)(ModuleName {
+            paths: vec![
+                String::from("cafe"),
+                String::from("expander"),
+                String::from("intrinsics"),
+            ],
+            versions: vec![],
+        })
+        .unwrap();
+        for (v, b) in intrinsics.bindings.bindings() {
+            bindings.insert(v.clone(), b.clone());
+        }
 
         for i in syn.syn_children_with_scope(root_scope) {
-            let def = self.expand_macro(i, &mut bindings);
-            deferred.push(def);
+            if let Some(def) = self.expand_macro(i, &mut bindings) {
+                deferred.push(def);
+            }
         }
 
         let mut items = vec![];
 
         for d in deferred {
-            let item = self.expand_item(d, &mut bindings);
-            if let Some(item) = item {
+            if let Some(item) = self.expand_item(d, &bindings) {
                 items.push(item);
             }
         }
@@ -168,37 +229,65 @@ impl Expander<'_> {
         ExpanderResult {
             module: Module {
                 span: syn.span(),
+                name: ModuleName {
+                    paths: vec![String::from("<script>")],
+                    versions: vec![],
+                },
                 items,
+                exports: Env::default(),
                 bindings: Env::with_bindings(bindings.into_bindings()),
             },
             diagnostics: std::mem::take(&mut self.diagnostics),
         }
     }
 
-    fn expand_macro(&mut self, syn: SynExp, env: &mut Env<String, Binding>) -> SynExp {
+    fn expand_macro(&mut self, syn: SynExp, env: &mut Env<String, Binding>) -> Option<SynExp> {
         if let SynExp::List(l) = syn {
             if let Some(SynExp::Symbol(s)) = l.sexps().first() {
-                if let Some(Binding::NativeSyntaxTransformer { transformer, .. }) = resolve(s, env)
-                {
-                    let s = transformer.expand(self, l, env);
-                    return self.expand_macro(s, env);
+                match resolve(s, env) {
+                    Some(Binding::NativeSyntaxTransformer { transformer, .. }) => {
+                        let s = transformer.expand(self, l, env);
+                        return self.expand_macro(s, env);
+                    }
+                    Some(Binding::Import { .. }) => {
+                        import(self, l, env);
+                        return None;
+                    }
+                    Some(Binding::Module { .. }) => {
+                        module(self, l);
+                        return None;
+                    }
+                    Some(Binding::CoreDefTransformer { scopes, .. }) => {
+                        let mut sexps = l.sexps().iter();
+                        if let Some(s) = sexps.nth(1).and_then(SynExp::symbol) {
+                            env.insert(
+                                s.value().to_string(),
+                                Binding::Value {
+                                    scopes: scopes.clone(),
+                                    orig_name: s.value().to_string(),
+                                    name: Some(s.value().to_string()),
+                                },
+                            );
+                        }
+                    }
+                    _ => {}
                 }
             }
-            SynExp::List(l)
+            Some(SynExp::List(l))
         } else {
-            syn
+            Some(syn)
         }
     }
 
-    fn expand_item(&mut self, syn: SynExp, env: &mut Env<String, Binding>) -> Option<ast::Item> {
+    fn expand_item(&mut self, syn: SynExp, env: &Env<String, Binding>) -> Option<ast::Item> {
         match syn {
             SynExp::List(l) => match l.sexps().iter().next() {
                 Some(SynExp::Symbol(s)) => match resolve(s, env) {
                     Some(Binding::Import { .. }) => {
-                        dbg!(&env);
-                        import(self, l, env);
-                        dbg!(&env);
-                        None
+                        panic!("import should have been removed in expand_macro")
+                    }
+                    Some(Binding::CoreDefTransformer { transformer, .. }) => {
+                        transformer(self, l, env).map(ast::Item::Define)
                     }
                     _ => Some(ast::Item::Expr(self.expand_expr(SynExp::List(l), env))),
                 },
@@ -636,28 +725,72 @@ thread_local! {
 
 #[cfg(test)]
 mod tests {
+    use std::{cell::RefCell, collections::HashMap};
+
     use expect_test::{expect, Expect};
 
     use crate::syntax::{cst::SynRoot, parser::parse_str};
 
     use super::{
-        transformers::{if_core_transformer, lambda_core_transformer},
+        transformers::{define_core_transformer, if_core_transformer, lambda_core_transformer},
         *,
     };
 
-    fn intrinsics_env() -> Env<'static, String, Binding> {
-        let mut intrinsics = Env::new();
-        intrinsics.insert(
-            String::from("import"),
-            Binding::Import {
-                scopes: Scopes::core(),
-            },
-        );
-        intrinsics.enter_consume()
+    struct Libs {
+        libs: RefCell<HashMap<ModuleName, Module>>,
+    }
+
+    impl Default for Libs {
+        fn default() -> Self {
+            let core_name = ModuleName {
+                paths: vec![
+                    String::from("cafe"),
+                    String::from("expander"),
+                    String::from("core"),
+                ],
+                versions: vec![],
+            };
+            Self {
+                libs: RefCell::new(HashMap::from([(
+                    core_name.clone(),
+                    Module {
+                        span: Span::dummy(),
+                        name: core_name,
+                        items: vec![],
+                        exports: core_env(),
+                        bindings: Env::default(),
+                    },
+                )])),
+            }
+        }
+    }
+
+    impl Libs {
+        fn import(&self, name: ModuleName) -> Result<Rc<ModuleInterface>, Diagnostic> {
+            Ok(Rc::new(
+                self.libs
+                    .borrow()
+                    .get(&name)
+                    .expect(&format!("{name}"))
+                    .to_interface(),
+            ))
+        }
+
+        fn define(&self, name: ModuleName, module: Module) {
+            self.libs.borrow_mut().insert(name, module);
+        }
     }
 
     fn core_env() -> Env<'static, String, Binding> {
         let mut core = Env::new();
+        core.insert(
+            String::from("define"),
+            Binding::CoreDefTransformer {
+                scopes: Scopes::core(),
+                name: String::from("define"),
+                transformer: define_core_transformer,
+            },
+        );
         core.insert(
             String::from("lambda"),
             Binding::CoreExprTransformer {
@@ -714,6 +847,7 @@ mod tests {
         let env = root_env();
         let mut expander = Expander {
             import: &|_| panic!(),
+            register: &|_, _| panic!(),
             diagnostics: vec![],
         };
         let ast = expander.expand_expr(children.next().expect("expected an item"), &env);
@@ -998,7 +1132,7 @@ mod tests {
         let red = RedTree::new(&res.tree);
         let root = SynRoot::new_red(&red, res.file_id);
         let children = root.children();
-        let or = dbg!(SynExp::cast(&children[0], res.file_id).unwrap());
+        let or = SynExp::cast(&children[0], res.file_id).unwrap();
         let out = or_transformer(or.into_list().unwrap()).unwrap();
         assert_eq!(out.to_string(), "#t");
         assert_eq!(out.syn_string(), "#t");
@@ -1011,7 +1145,7 @@ mod tests {
         let red = RedTree::new(&res.tree);
         let root = SynRoot::new_red(&red, res.file_id);
         let children = root.children();
-        let or = dbg!(SynExp::cast(&children[0], res.file_id).unwrap());
+        let or = SynExp::cast(&children[0], res.file_id).unwrap();
         let out = or_transformer(or.into_list().unwrap()).unwrap();
         assert_eq!(out.to_string(), "#f");
         assert_eq!(out.syn_string(), "#f");
@@ -1024,7 +1158,7 @@ mod tests {
         let red = RedTree::new(&res.tree);
         let root = SynRoot::new_red(&red, res.file_id);
         let children = root.children();
-        let or = dbg!(SynExp::cast(&children[0], res.file_id).unwrap());
+        let or = SynExp::cast(&children[0], res.file_id).unwrap();
         let out = or_transformer(or.into_list().unwrap()).unwrap();
         assert_eq!(out.to_string(), r"(let ((x #\0)) (if x x (or #\1)))");
         assert_eq!(out.syn_string(), r"(let ((x #\0)) (if x x (or #\1)))");
@@ -1033,25 +1167,17 @@ mod tests {
     mod modules {
         use super::*;
 
-        fn importer(module_name: ModuleName) -> Result<Rc<ModuleInterface>, Diagnostic> {
-            assert_eq!("(cafe expander intrinsics ())", module_name.to_string());
-
-            Ok(Rc::new(ModuleInterface {
-                span: Span::dummy(),
-                name: ModuleName {
-                    paths: vec!["cafe".into(), "intrinsics".into(), "expander".into()],
-                    versions: vec![],
-                },
-                bindings: core_env(),
-            }))
-        }
-
         fn check(input: &str, expected: Expect) {
             let res = parse_str(input);
             assert_eq!(res.diagnostics, vec![]);
             let syn = SynRoot::new(&res.tree, res.file_id);
-            let env = intrinsics_env();
-            let res = expand_root(syn, &env, importer);
+            let libs = Libs::default();
+            let res = expand_root(
+                syn,
+                &Env::default(),
+                |name| libs.import(name),
+                |name, module| libs.define(name, module),
+            );
             assert_eq!(res.diagnostics, vec![]);
             expected.assert_debug_eq(&res.module);
         }
@@ -1059,13 +1185,54 @@ mod tests {
         #[test]
         fn define_and_use_variable() {
             check(
-                r"(import (cafe expander intrinsics ()))
+                r"(import (cafe expander core ()))
                   (define id (lambda (x) x))
                   (id #t)",
                 expect![[r#"
-                    mod@0:0..24
-                      {#t 0:0..2}
-                      {#\a 0:21..3}
+                    mod (<script> ()) @0:0..103
+                      {define@0:51..26
+                        {|id| 0:59..2}
+                        {λ 0:62..14
+                          ({|x 1| 0:71..1})
+                          #f
+                          {var |x 1| 0:74..1}}}
+                      {list 0:96..7
+                        {var |id| 0:97..2}
+                        {#t 0:100..2}}
+                "#]],
+            );
+        }
+
+        #[test]
+        fn simple_module() {
+            check(
+                r"(module (ID ()) (id)
+                    (import (cafe expander core ()))
+                    (define id (lambda (x) x)))
+                  (import (ID ()))
+                  (id #\a)",
+                expect![[r#"
+                    mod (<script> ()) @0:0..183
+                      {list 0:175..8
+                        {var |id| 0:176..2}
+                        {#\a 0:179..3}}
+                "#]],
+            );
+        }
+
+        #[test]
+        fn reexport() {
+            check(
+                r"(module (rnrs base ()) (lambda)
+                    (import (cafe expander core ())))
+                  (import (rnrs base ()))
+                  (lambda (x) x)",
+                expect![[r#"
+                    mod (<script> ()) @0:0..160
+                      {λ 0:146..14
+                        ({|x 1| 0:155..1})
+                        #f
+                        {var |x 1| 0:158..1}}
                 "#]],
             );
         }
@@ -1076,7 +1243,7 @@ mod tests {
                 r"#t
                   #\a",
                 expect![[r#"
-                    mod@0:0..24
+                    mod (<script> ()) @0:0..24
                       {#t 0:0..2}
                       {#\a 0:21..3}
                 "#]],
@@ -1084,27 +1251,27 @@ mod tests {
         }
 
         #[test]
-        fn import_intrinsics() {
+        fn import_core() {
             check(
-                "(import (cafe expander intrinsics ()))
+                "(import (cafe expander core ()))
                  (lambda (x) x)",
                 expect![[r#"
-                    mod@0:0..70
-                      {λ 0:56..14
-                        ({|x 1| 0:65..1})
+                    mod (<script> ()) @0:0..64
+                      {λ 0:50..14
+                        ({|x 1| 0:59..1})
                         #f
-                        {var |x 1| 0:68..1}}
+                        {var |x 1| 0:62..1}}
                 "#]],
             );
             check(
-                "(import (cafe expander intrinsics ()))
+                "(import (cafe expander core ()))
                  (if #t #f)",
                 expect![[r#"
-                    mod@0:0..66
-                      {if 0:56..10
-                        {#t 0:60..2}
-                        {#f 0:63..2}
-                        {void 0:56..10}}
+                    mod (<script> ()) @0:0..60
+                      {if 0:50..10
+                        {#t 0:54..2}
+                        {#f 0:57..2}
+                        {void 0:50..10}}
                 "#]],
             );
         }

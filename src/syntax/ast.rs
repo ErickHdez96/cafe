@@ -36,8 +36,20 @@ pub struct ModuleInterface {
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Module {
     pub span: Span,
+    pub name: ModuleName,
     pub items: Vec<Item>,
+    pub exports: Env<'static, String, Binding>,
     pub bindings: Env<'static, String, Binding>,
+}
+
+impl Module {
+    pub fn to_interface(&self) -> ModuleInterface {
+        ModuleInterface {
+            span: self.span,
+            name: self.name.clone(),
+            bindings: self.exports.clone(),
+        }
+    }
 }
 
 impl fmt::Debug for Module {
@@ -47,7 +59,8 @@ impl fmt::Debug for Module {
             let padding = " ".repeat(width);
             write!(
                 f,
-                "{padding}mod@{}{}",
+                "{padding}mod {} @{}{}",
+                self.name,
                 self.span,
                 if self.items.is_empty() {
                     String::new()
@@ -93,12 +106,14 @@ impl fmt::Debug for Ident {
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Item {
+    Define(Define),
     Expr(Expr),
 }
 
 impl Item {
     pub fn span(&self) -> Span {
         match self {
+            Item::Define(d) => d.span,
             Item::Expr(e) => e.span,
         }
     }
@@ -108,10 +123,12 @@ impl fmt::Debug for Item {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if f.alternate() {
             match self {
+                Item::Define(d) => d.fmt(f),
                 Item::Expr(e) => e.fmt(f),
             }
         } else {
             match self {
+                Item::Define(d) => f.debug_tuple("DefExpr::Define").field(&d).finish(),
                 Item::Expr(e) => f.debug_tuple("DefExpr::Expr").field(&e).finish(),
             }
         }
@@ -122,6 +139,34 @@ impl fmt::Debug for Item {
 pub struct Define {
     pub span: Span,
     pub name: Ident,
+    pub expr: Option<Expr>,
+}
+
+impl fmt::Debug for Define {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if f.alternate() {
+            let width = f.width().unwrap_or_default();
+            let padding = " ".repeat(width);
+            write!(
+                f,
+                "{padding}{{define@{}\n{:#width$?}{}}}",
+                self.span,
+                self.name,
+                if let Some(e) = &self.expr {
+                    format!("\n{e:#width$?}", width = width + INDENTATION_WIDTH)
+                } else {
+                    String::new()
+                },
+                width = width + INDENTATION_WIDTH,
+            )
+        } else {
+            f.debug_struct("Define")
+                .field("span", &self.span)
+                .field("name", &self.name)
+                .field("expr", &self.expr)
+                .finish()
+        }
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]

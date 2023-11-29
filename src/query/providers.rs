@@ -7,7 +7,7 @@ use crate::{
     expander::{expand_root, Binding, ExpanderResult},
     file::{FileId, SourceFile},
     syntax::{
-        ast::{ModuleInterface, ModuleName},
+        ast::{Module, ModuleInterface, ModuleName},
         cst::SynRoot,
         parser::{parse_source_file, ParseResult},
     },
@@ -33,6 +33,10 @@ pub fn root_binding_env_provider(_: &QCtx, _: ()) -> Rc<Env<'static, String, Bin
 
 pub fn register_intrinsic_lib((name, lib): (ModuleName, ModuleInterface)) {
     INTRINSIC_LIBRARIES.with(|i| i.borrow_mut().insert(name, Rc::new(lib)));
+}
+
+pub fn register_lib((name, lib): (ModuleName, Module)) {
+    REGISTERED_LIBRARIES.with(|i| i.borrow_mut().insert(name, Rc::new(lib)));
 }
 
 pub fn read_file_provider(_: &QCtx, path: PathBuf) -> Res<Rc<SourceFile>> {
@@ -70,7 +74,13 @@ pub fn module_interface_provider(
     if let Some(intrinsics_lib) = lib {
         Ok(intrinsics_lib)
     } else {
-        todo!()
+        let registered_lib =
+            REGISTERED_LIBRARIES.with(|i| i.borrow().get(&module_name).map(Rc::clone));
+        if let Some(registered_lib) = registered_lib {
+            Ok(Rc::new(registered_lib.to_interface()))
+        } else {
+            todo!()
+        }
     }
 }
 
@@ -79,9 +89,12 @@ pub fn expand_provider(qctx: &QCtx, module_name: ModuleName) -> Res<ExpanderResu
     let parse_res = qctx.parse(pathbuf)?;
     let syn = SynRoot::new(&parse_res.tree, parse_res.file_id);
     let root_binding_env = qctx.root_binding_env(());
-    let mut expander_res = expand_root(syn, root_binding_env.as_ref(), |mname| {
-        qctx.module_interface(mname)
-    });
+    let mut expander_res = expand_root(
+        syn,
+        root_binding_env.as_ref(),
+        |mname| qctx.module_interface(mname),
+        |mname, module| register_lib((mname, module)),
+    );
     expander_res.diagnostics.extend(parse_res.diagnostics);
     Ok(expander_res)
 }
@@ -91,4 +104,5 @@ thread_local! {
     static COMPILER_CONFIG: RefCell<Rc<CompilerConfig>> = RefCell::default();
     static ROOT_BINDING_ENV: RefCell<Rc<Env<'static, String, Binding>>> = RefCell::default();
     static INTRINSIC_LIBRARIES: RefCell<HashMap<ModuleName, Rc<ModuleInterface>>> = RefCell::default();
+    static REGISTERED_LIBRARIES: RefCell<HashMap<ModuleName, Rc<Module>>> = RefCell::default();
 }
