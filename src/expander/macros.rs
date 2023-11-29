@@ -7,7 +7,7 @@ use crate::{
     syntax::cst::{SynBoolean, SynChar, SynExp, SynList, SynSymbol},
 };
 
-use super::{resolve, Binding};
+use super::{resolve, Binding, Expander};
 
 const INDENTATION_WIDTH: usize = 2;
 
@@ -320,9 +320,20 @@ fn validate_splice(
     }
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct NativeSyntaxTransformer {
     rules: Vec<(Pattern, Template)>,
+}
+
+impl NativeSyntaxTransformer {
+    pub fn expand(
+        &self,
+        _expander: &mut Expander,
+        _syn: SynList,
+        _env: &Env<String, Binding>,
+    ) -> SynExp {
+        todo!()
+    }
 }
 
 impl fmt::Debug for NativeSyntaxTransformer {
@@ -361,13 +372,13 @@ pub enum CapturedVariable {
     Repeat(Box<CapturedVariable>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PatternConstant {
     Boolean(SynBoolean),
     Char(SynChar),
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Pattern {
     /// _
     Discard(SynSymbol),
@@ -489,7 +500,7 @@ impl fmt::Debug for Pattern {
     }
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Template {
     /// `#t` `#\a`
     Constant(SynExp),
@@ -780,7 +791,7 @@ mod tests {
             let syn = children
                 .next()
                 .expect("expected an item")
-                .list()
+                .into_list()
                 .unwrap()
                 .clone();
             let (pattern, errs) = compile_syntax_rules(&syn, &root_env());
@@ -937,7 +948,7 @@ mod tests {
             let syn = children
                 .next()
                 .expect("expected an item")
-                .list()
+                .into_list()
                 .unwrap()
                 .clone();
             let (_, errs) = compile_syntax_rules(&syn, &root_env());

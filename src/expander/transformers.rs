@@ -1,37 +1,91 @@
 use crate::{
-    diagnostics::Diagnostic,
     env::Env,
     syntax::{
-        ast,
+        ast::{self, ModuleName},
         cst::{SynExp, SynList, SynSymbol},
     },
 };
 
-use super::{expand_expr, scopes::Scope, Binding};
+use super::{scopes::Scope, Binding, Expander};
+
+pub fn import(expander: &mut Expander, syn: SynList, env: &mut Env<String, Binding>) {
+    let mut paths = vec![];
+    let versions = vec![];
+    let syn_span = syn.span();
+    let close_delim_char = syn.close_delim_char();
+    let close_delim_span = syn.close_delim_span();
+    let (sexps, _) = syn.into_parts();
+    let mut sexps = sexps.into_iter();
+    assert!(sexps.next().is_some());
+
+    match sexps.next() {
+        Some(SynExp::List(l)) => {
+            for sy in l.sexps() {
+                match sy {
+                    SynExp::Symbol(s) => paths.push(String::from(s.value())),
+                    SynExp::List(l) => {
+                        if !l.sexps().is_empty() {
+                            expander.emit_error(|b| b.msg("version must be empty").span(l.span()));
+                        }
+                    }
+                    se => {
+                        expander.emit_error(|b| {
+                            b.msg(format!("expected an identifier, found {}", se))
+                                .span(l.close_delim_span())
+                        });
+                    }
+                }
+            }
+        }
+        sexp => {
+            expander.emit_error(|b| {
+                b.msg(format!(
+                    "expected a module name, found {}",
+                    sexp.as_ref()
+                        .map(ToString::to_string)
+                        .unwrap_or_else(|| close_delim_char.to_string())
+                ))
+                .span(close_delim_span)
+            });
+            return;
+        }
+    }
+
+    match (expander.import)(ModuleName { paths, versions }) {
+        Ok(i) => {
+            for (v, b) in dbg!(i.bindings.bindings()) {
+                if env.has_immediate(v) {
+                    expander.emit_error(|b| {
+                        b.msg(format!("variable {} already bound", v))
+                            .span(syn_span)
+                    });
+                } else {
+                    env.insert(v.clone(), b.clone());
+                }
+            }
+        }
+        Err(d) => {
+            expander.diagnostics.push(d);
+        }
+    }
+}
 
 pub fn if_core_transformer(
-    syn: &SynList,
+    expander: &mut Expander,
+    syn: SynList,
     env: &Env<String, Binding>,
-) -> (ast::Expr, Vec<Diagnostic>) {
-    let mut diags = vec![];
-    let mut children = syn.sexps().iter();
+) -> ast::Expr {
+    let span = syn.span();
+    let (sexps, _) = syn.into_parts();
+    let mut children = sexps.into_iter();
     children.next();
 
     let cond = match children.next() {
-        Some(c) => {
-            let (e, d) = expand_expr(c, env);
-            diags.extend(d);
-            e
-        }
+        Some(c) => expander.expand_expr(c, env),
         None => {
-            diags.push(
-                Diagnostic::builder()
-                    .msg("expected a condition")
-                    .span(syn.span())
-                    .finish(),
-            );
+            expander.emit_error(|b| b.msg("expected a condition").span(span));
             ast::Expr {
-                span: syn.span(),
+                span,
                 kind: ast::ExprKind::Void,
             }
             .into_error()
@@ -39,20 +93,11 @@ pub fn if_core_transformer(
     };
 
     let tru = match children.next() {
-        Some(c) => {
-            let (e, d) = expand_expr(c, env);
-            diags.extend(d);
-            e
-        }
+        Some(c) => expander.expand_expr(c, env),
         None => {
-            diags.push(
-                Diagnostic::builder()
-                    .msg("expected a true branch")
-                    .span(syn.span())
-                    .finish(),
-            );
+            expander.emit_error(|b| b.msg("expected a true branch").span(span));
             ast::Expr {
-                span: syn.span(),
+                span,
                 kind: ast::ExprKind::Void,
             }
             .into_error()
@@ -60,47 +105,39 @@ pub fn if_core_transformer(
     };
 
     let fls = match children.next() {
-        Some(c) => {
-            let (e, d) = expand_expr(c, env);
-            diags.extend(d);
-            e
-        }
+        Some(c) => expander.expand_expr(c, env),
         None => ast::Expr {
-            span: syn.span(),
+            span,
             kind: ast::ExprKind::Void,
         },
     };
 
-    (
-        ast::Expr {
-            span: syn.span(),
-            kind: ast::ExprKind::If(Box::new(cond), Box::new(tru), Box::new(fls)),
-        },
-        diags,
-    )
+    ast::Expr {
+        span,
+        kind: ast::ExprKind::If(Box::new(cond), Box::new(tru), Box::new(fls)),
+    }
 }
 
 pub fn lambda_core_transformer(
-    syn: &SynList,
+    expander: &mut Expander,
+    syn: SynList,
     env: &Env<String, Binding>,
-) -> (ast::Expr, Vec<Diagnostic>) {
+) -> ast::Expr {
     let lambda_scope = Scope::new();
     let mut lambda_env = env.enter();
-    let mut diags = vec![];
     let mut children = syn.sexps().iter();
     children.next();
 
     let (formal_binds, rest_bind) = children
         .next()
-        .map(|c| lambda_formals(c, &mut diags))
+        .map(|c| lambda_formals(expander, c))
         .unwrap_or_else(|| {
-            diags.push(
-                Diagnostic::builder()
+            expander.emit_error(|b| {
+                b
                     // fixme
                     .msg("bad syntax, expected a formals list")
                     .span(syn.span())
-                    .finish(),
-            );
+            });
             (vec![], None)
         });
 
@@ -137,28 +174,21 @@ pub fn lambda_core_transformer(
     }
 
     let body = children
-        .map(|c| {
-            let (expr, errs) = expand_expr(&c.with_scope(lambda_scope), &lambda_env);
-            diags.extend(errs);
-            expr
-        })
+        .map(|c| expander.expand_expr(c.with_scope(lambda_scope), &lambda_env))
         .collect::<Vec<_>>();
-    (
-        ast::Expr {
-            span: syn.span(),
-            kind: ast::ExprKind::Lambda {
-                formals,
-                rest,
-                exprs: body,
-            },
+    ast::Expr {
+        span: syn.span(),
+        kind: ast::ExprKind::Lambda {
+            formals,
+            rest,
+            exprs: body,
         },
-        diags,
-    )
+    }
 }
 
 fn lambda_formals<'a>(
+    expander: &mut Expander,
     syn: &'a SynExp,
-    diags: &mut Vec<Diagnostic>,
 ) -> (Vec<&'a SynSymbol>, Option<&'a SynSymbol>) {
     match syn {
         SynExp::List(l) => {
@@ -170,12 +200,10 @@ fn lambda_formals<'a>(
                         formals.push(s);
                     }
                     SynExp::List(_) | SynExp::Boolean(_) | SynExp::Char(_) => {
-                        diags.push(
-                            Diagnostic::builder()
-                                .msg(format!("expected a formal, found {}", f.red().green()))
+                        expander.emit_error(|b| {
+                            b.msg(format!("expected a formal, found {}", f.red().green()))
                                 .span(f.span())
-                                .finish(),
-                        );
+                        });
                     }
                 }
             }
@@ -185,12 +213,10 @@ fn lambda_formals<'a>(
                         dot = Some(s);
                     }
                     SynExp::List(_) | SynExp::Boolean(_) | SynExp::Char(_) => {
-                        diags.push(
-                            Diagnostic::builder()
-                                .msg(format!("expected a formal, found {}", f.red().green()))
+                        expander.emit_error(|b| {
+                            b.msg(format!("expected a formal, found {}", f.red().green()))
                                 .span(f.span())
-                                .finish(),
-                        );
+                        });
                     }
                 }
             }
@@ -198,21 +224,17 @@ fn lambda_formals<'a>(
         }
         SynExp::Symbol(s) => (vec![], Some(s)),
         SynExp::Char(c) => {
-            diags.push(
-                Diagnostic::builder()
-                    .msg(format!("expected a list or an identifier, found {c}"))
+            expander.emit_error(|b| {
+                b.msg(format!("expected a list or an identifier, found {c}"))
                     .span(c.span())
-                    .finish(),
-            );
+            });
             (vec![], None)
         }
         SynExp::Boolean(b) => {
-            diags.push(
-                Diagnostic::builder()
-                    .msg(format!("expected a list or an identifier, found {b}"))
+            expander.emit_error(|br| {
+                br.msg(format!("expected a list or an identifier, found {b}"))
                     .span(b.span())
-                    .finish(),
-            );
+            });
             (vec![], None)
         }
     }

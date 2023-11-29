@@ -12,8 +12,13 @@ use std::{
 use crate::{
     config::CompilerConfig,
     diagnostics::Diagnostic,
+    env::Env,
+    expander::{Binding, ExpanderResult},
     file::{FileId, SourceFile},
-    syntax::parser::ParseResult,
+    syntax::{
+        ast::{ModuleInterface, ModuleName},
+        parser::ParseResult,
+    },
 };
 
 pub use providers::set_compiler_config;
@@ -153,13 +158,47 @@ build_system! {
             key: PathBuf,
             result: Res<ParseResult>,
         },
+        {
+            name: lookup_module_name,
+            provider: providers::lookup_module_name_provider,
+            key: ModuleName,
+            result: Res<PathBuf>,
+        },
+        {
+            name: module_interface,
+            provider: providers::module_interface_provider,
+            key: ModuleName,
+            result: Res<Rc<ModuleInterface>>,
+        },
+        {
+            name: root_binding_env,
+            provider: providers::root_binding_env_provider,
+            key: (),
+            result: Rc<Env<'static, String, Binding>>,
+        },
+        {
+            name: expand,
+            provider: providers::expand_provider,
+            key: ModuleName,
+            result: Res<ExpanderResult>,
+        },
     ],
     inputs: [
         {
             name: feed_compiler_config,
             setter: providers::set_compiler_config,
             ty: CompilerConfig,
-        }
+        },
+        {
+            name: feed_root_binding_env,
+            setter: providers::set_root_binding_env,
+            ty: Env<'static, String, Binding>,
+        },
+        {
+            name: feed_intrinsic_lib,
+            setter: providers::register_intrinsic_lib,
+            ty: (ModuleName, ModuleInterface),
+        },
     ],
 }
 

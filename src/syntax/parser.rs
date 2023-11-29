@@ -15,6 +15,7 @@ use super::{
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ParseResult {
+    pub file_id: FileId,
     pub tree: Rc<GreenTree>,
     pub diagnostics: Vec<Diagnostic>,
 }
@@ -32,6 +33,7 @@ pub fn parse_str_with_config(input: &str, file_id: FileId, config: ParserConfig)
     p.file_id = file_id;
     p.parse();
     ParseResult {
+        file_id,
         tree: p.builder.finish(),
         diagnostics: std::mem::take(&mut p.diags),
     }

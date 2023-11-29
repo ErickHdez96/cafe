@@ -1,4 +1,4 @@
-use std::{cell::Cell, collections::HashSet, num::NonZeroUsize};
+use std::{cell::Cell, collections::HashSet, hash, num::NonZeroUsize};
 
 use crate::syntax::cst::{SynExp, SynSymbol};
 
@@ -61,6 +61,14 @@ impl Scopes {
             count += 1;
         }
         NonZeroUsize::new(count)
+    }
+}
+
+impl hash::Hash for Scopes {
+    fn hash<H: hash::Hasher>(&self, state: &mut H) {
+        for scope in &self.0 {
+            scope.hash(state);
+        }
     }
 }
 

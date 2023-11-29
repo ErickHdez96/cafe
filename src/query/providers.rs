@@ -3,8 +3,14 @@ use std::{cell::RefCell, collections::HashMap, path::PathBuf, rc::Rc};
 use crate::{
     config::CompilerConfig,
     diagnostics::Diagnostic,
+    env::Env,
+    expander::{expand_root, Binding, ExpanderResult},
     file::{FileId, SourceFile},
-    syntax::parser::{parse_source_file, ParseResult},
+    syntax::{
+        ast::{ModuleInterface, ModuleName},
+        cst::SynRoot,
+        parser::{parse_source_file, ParseResult},
+    },
 };
 
 use super::{QCtx, Res};
@@ -15,6 +21,18 @@ pub fn set_compiler_config(config: CompilerConfig) {
 
 pub fn compiler_config_provider(_: &QCtx, _: ()) -> Rc<CompilerConfig> {
     COMPILER_CONFIG.with(|c| Rc::clone(&c.borrow()))
+}
+
+pub fn set_root_binding_env(env: Env<'static, String, Binding>) {
+    ROOT_BINDING_ENV.with(|e| *e.borrow_mut() = Rc::new(env));
+}
+
+pub fn root_binding_env_provider(_: &QCtx, _: ()) -> Rc<Env<'static, String, Binding>> {
+    ROOT_BINDING_ENV.with(|e| Rc::clone(&e.borrow()))
+}
+
+pub fn register_intrinsic_lib((name, lib): (ModuleName, ModuleInterface)) {
+    INTRINSIC_LIBRARIES.with(|i| i.borrow_mut().insert(name, Rc::new(lib)));
 }
 
 pub fn read_file_provider(_: &QCtx, path: PathBuf) -> Res<Rc<SourceFile>> {
@@ -40,7 +58,37 @@ pub fn parse_provider(qctx: &QCtx, path: PathBuf) -> Res<ParseResult> {
     Ok(parse_source_file(&source_file, config.parser))
 }
 
+pub fn lookup_module_name_provider(_qctx: &QCtx, _module_name: ModuleName) -> Res<PathBuf> {
+    todo!()
+}
+
+pub fn module_interface_provider(
+    _qctx: &QCtx,
+    module_name: ModuleName,
+) -> Res<Rc<ModuleInterface>> {
+    let lib = INTRINSIC_LIBRARIES.with(|i| i.borrow().get(&module_name).map(Rc::clone));
+    if let Some(intrinsics_lib) = lib {
+        Ok(intrinsics_lib)
+    } else {
+        todo!()
+    }
+}
+
+pub fn expand_provider(qctx: &QCtx, module_name: ModuleName) -> Res<ExpanderResult> {
+    let pathbuf = qctx.lookup_module_name(module_name)?;
+    let parse_res = qctx.parse(pathbuf)?;
+    let syn = SynRoot::new(&parse_res.tree, parse_res.file_id);
+    let root_binding_env = qctx.root_binding_env(());
+    let mut expander_res = expand_root(syn, root_binding_env.as_ref(), |mname| {
+        qctx.module_interface(mname)
+    });
+    expander_res.diagnostics.extend(parse_res.diagnostics);
+    Ok(expander_res)
+}
+
 thread_local! {
     static FILE_MAPPING: RefCell<HashMap<FileId, Rc<SourceFile>>> = RefCell::default();
     static COMPILER_CONFIG: RefCell<Rc<CompilerConfig>> = RefCell::default();
+    static ROOT_BINDING_ENV: RefCell<Rc<Env<'static, String, Binding>>> = RefCell::default();
+    static INTRINSIC_LIBRARIES: RefCell<HashMap<ModuleName, Rc<ModuleInterface>>> = RefCell::default();
 }

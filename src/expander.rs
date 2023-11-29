@@ -1,34 +1,57 @@
-use std::{cell::Cell, rc::Rc, slice};
+use std::{cell::Cell, fmt, rc::Rc, slice};
 
 use crate::{
-    diagnostics::Diagnostic,
+    diagnostics::{Diagnostic, DiagnosticBuilder},
     env::Env,
     expander::scopes::{Scope, Scopes},
     file::FileId,
     span::Span,
     syntax::{
-        ast,
-        cst::{GreenTree, RedTree, SynExp, SynList, SynSymbol},
+        ast::{self, Module, ModuleInterface, ModuleName},
+        cst::{GreenTree, RedTree, SynExp, SynList, SynRoot, SynSymbol},
         SyntaxKind,
     },
 };
 
-use self::macros::NativeSyntaxTransformer;
+use self::{macros::NativeSyntaxTransformer, transformers::import};
 
 pub mod macros;
 pub mod scopes;
 pub mod transformers;
 
-type CoreDefTransformer = fn(&SynList, &Env<String, Binding>) -> (ast::Expr, Vec<Diagnostic>);
-type CoreExprTransformer = fn(&SynList, &Env<String, Binding>) -> (ast::Expr, Vec<Diagnostic>);
-type SyntaxTransformer = fn(&SynList) -> Result<SynExp, Vec<Diagnostic>>;
+type CoreDefTransformer = fn(&mut Expander, SynList, &Env<String, Binding>) -> ast::Expr;
+type CoreExprTransformer = fn(&mut Expander, SynList, &Env<String, Binding>) -> ast::Expr;
+type SyntaxTransformer = fn(SynList) -> Result<SynExp, Vec<Diagnostic>>;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ExpanderResult {
+    pub module: Module,
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+pub struct Expander<'i> {
+    import: &'i dyn Fn(ModuleName) -> Result<Rc<ModuleInterface>, Diagnostic>,
+    diagnostics: Vec<Diagnostic>,
+}
+
+impl fmt::Debug for Expander<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ExpanderResult")
+            .field("import", &())
+            .field("diagnostics", &self.diagnostics)
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Binding {
     Value {
         scopes: Scopes,
         orig_name: String,
         name: Option<String>,
+    },
+    Import {
+        scopes: Scopes,
     },
     CoreDefTransformer {
         scopes: Scopes,
@@ -71,6 +94,7 @@ impl Binding {
 
     pub fn name(&self) -> &str {
         match self {
+            Binding::Import { .. } => "import",
             Binding::Value {
                 name, orig_name, ..
             } => name.as_ref().unwrap_or(orig_name),
@@ -84,6 +108,7 @@ impl Binding {
     pub fn scopes(&self) -> &Scopes {
         match self {
             Binding::Value { scopes, .. }
+            | Binding::Import { scopes }
             | Binding::CoreDefTransformer { scopes, .. }
             | Binding::CoreExprTransformer { scopes, .. }
             | Binding::SyntaxTransformer { scopes, .. }
@@ -94,6 +119,7 @@ impl Binding {
     pub fn scopes_mut(&mut self) -> &mut Scopes {
         match self {
             Binding::Value { ref mut scopes, .. }
+            | Binding::Import { ref mut scopes }
             | Binding::CoreDefTransformer { ref mut scopes, .. }
             | Binding::CoreExprTransformer { ref mut scopes, .. }
             | Binding::SyntaxTransformer { ref mut scopes, .. }
@@ -107,193 +133,258 @@ enum ItemSyn {
     Syn(SynExp),
 }
 
-pub fn expand_expr(syn: &SynExp, env: &Env<String, Binding>) -> (ast::Expr, Vec<Diagnostic>) {
-    match &syn {
-        SynExp::Boolean(b) => (
-            ast::Expr {
-                span: syn.span(),
-                kind: ast::ExprKind::Boolean(b.value()),
-            },
-            vec![],
-        ),
-        SynExp::Char(c) => (
-            ast::Expr {
-                span: syn.span(),
-                kind: ast::ExprKind::Char(c.value()),
-            },
-            vec![],
-        ),
-        SynExp::Symbol(s) => match resolve(s, env) {
-            Some(Binding::Value {
-                orig_name, name, ..
-            }) => (
-                ast::Expr {
-                    span: syn.span(),
-                    kind: ast::ExprKind::Var(ast::Ident {
-                        span: syn.span(),
-                        value: name.as_ref().unwrap_or(orig_name).to_string(),
-                    }),
-                },
-                vec![],
-            ),
-            _ => (
-                ast::Expr {
-                    span: syn.span(),
-                    kind: ast::ExprKind::Var(ast::Ident {
-                        span: syn.span(),
-                        value: s.value().to_string(),
-                    }),
-                },
-                vec![Diagnostic::builder()
-                    .span(syn.span())
-                    .msg(format!("undefined variable {}", s.value()))
-                    .finish()],
-            ),
-        },
-        SynExp::List(l) => expand_list_expr(l, env),
-    }
+pub fn expand_root(
+    syn: SynRoot,
+    base_env: &Env<'_, String, Binding>,
+    import: impl Fn(ModuleName) -> Result<Rc<ModuleInterface>, Diagnostic>,
+) -> ExpanderResult {
+    let mut expander = Expander {
+        import: &import,
+        diagnostics: vec![],
+    };
+    expander.expand_root(syn, base_env)
 }
 
-fn expand_syn(syn: &SynExp, env: &Env<String, Binding>) -> (ItemSyn, Vec<Diagnostic>) {
-    if let SynExp::List(l) = &syn {
-        if let Some(head) = l.sexps().first() {
-            match head {
-                SynExp::List(_) => todo!(),
-                SynExp::Symbol(s) => {
-                    if let Some(Binding::SyntaxTransformer { transformer, .. }) = resolve(s, env) {
-                        return match transformer(l) {
-                            Ok(res) => (ItemSyn::Syn(res), vec![]),
-                            Err(d) => (
-                                ItemSyn::Expr(
-                                    ast::Expr {
-                                        span: syn.span(),
-                                        kind: ast::ExprKind::List(vec![]),
-                                    }
-                                    .into_error(),
-                                ),
-                                d,
-                            ),
-                        };
-                    }
+impl Expander<'_> {
+    fn expand_root(&mut self, syn: SynRoot, base_env: &Env<'_, String, Binding>) -> ExpanderResult {
+        let root_scope = Scope::new();
+        let mut bindings = base_env.enter();
+        let mut deferred = vec![];
+
+        for i in syn.syn_children_with_scope(root_scope) {
+            let def = self.expand_macro(i, &mut bindings);
+            deferred.push(def);
+        }
+
+        let mut items = vec![];
+
+        for d in deferred {
+            let item = self.expand_item(d, &mut bindings);
+            if let Some(item) = item {
+                items.push(item);
+            }
+        }
+
+        ExpanderResult {
+            module: Module {
+                span: syn.span(),
+                items,
+                bindings: Env::with_bindings(bindings.into_bindings()),
+            },
+            diagnostics: std::mem::take(&mut self.diagnostics),
+        }
+    }
+
+    fn expand_macro(&mut self, syn: SynExp, env: &mut Env<String, Binding>) -> SynExp {
+        if let SynExp::List(l) = syn {
+            if let Some(SynExp::Symbol(s)) = l.sexps().first() {
+                if let Some(Binding::NativeSyntaxTransformer { transformer, .. }) = resolve(s, env)
+                {
+                    let s = transformer.expand(self, l, env);
+                    return self.expand_macro(s, env);
                 }
-                SynExp::Boolean(_) | SynExp::Char(_) => {}
+            }
+            SynExp::List(l)
+        } else {
+            syn
+        }
+    }
+
+    fn expand_item(&mut self, syn: SynExp, env: &mut Env<String, Binding>) -> Option<ast::Item> {
+        match syn {
+            SynExp::List(l) => match l.sexps().iter().next() {
+                Some(SynExp::Symbol(s)) => match resolve(s, env) {
+                    Some(Binding::Import { .. }) => {
+                        dbg!(&env);
+                        import(self, l, env);
+                        dbg!(&env);
+                        None
+                    }
+                    _ => Some(ast::Item::Expr(self.expand_expr(SynExp::List(l), env))),
+                },
+                _ => Some(ast::Item::Expr(self.expand_expr(SynExp::List(l), env))),
+            },
+            SynExp::Symbol(_) | SynExp::Boolean(_) | SynExp::Char(_) => {
+                Some(ast::Item::Expr(self.expand_expr(syn, env)))
             }
         }
     }
-    let (e, d) = expand_expr(syn, env);
-    (ItemSyn::Expr(e), d)
-}
 
-fn expand_list_expr(syn: &SynList, env: &Env<String, Binding>) -> (ast::Expr, Vec<Diagnostic>) {
-    let mut elems = syn.sexps().iter();
-    match elems.next() {
-        Some(head) => match head {
-            SynExp::List(_) => {
-                let (res, mut diags) = expand_syn(head, env);
-                match res {
-                    ItemSyn::Expr(e) => {
-                        let (mut rest_e, rest_diags) = expand_exprs_iter(elems, env);
-                        rest_e.insert(0, e);
-                        diags.extend(rest_diags);
-                        (
-                            ast::Expr {
-                                span: syn.span(),
-                                kind: ast::ExprKind::List(rest_e),
-                            },
-                            diags,
-                        )
+    fn expand_expr(&mut self, syn: SynExp, env: &Env<String, Binding>) -> ast::Expr {
+        let span = syn.span();
+        match syn {
+            SynExp::Boolean(b) => ast::Expr {
+                span,
+                kind: ast::ExprKind::Boolean(b.value()),
+            },
+            SynExp::Char(c) => ast::Expr {
+                span,
+                kind: ast::ExprKind::Char(c.value()),
+            },
+            SynExp::Symbol(s) => match resolve(&s, env) {
+                Some(Binding::Value {
+                    orig_name, name, ..
+                }) => ast::Expr {
+                    span,
+                    kind: ast::ExprKind::Var(ast::Ident {
+                        span,
+                        value: name.as_ref().unwrap_or(orig_name).to_string(),
+                    }),
+                },
+                _ => {
+                    self.emit_error(|b| {
+                        b.span(span)
+                            .msg(format!("undefined variable {}", s.value()))
+                    });
+                    ast::Expr {
+                        span,
+                        kind: ast::ExprKind::Var(ast::Ident {
+                            span,
+                            value: s.value().to_string(),
+                        }),
                     }
-                    ItemSyn::Syn(_) => todo!(),
+                }
+            },
+            SynExp::List(l) => self.expand_list_expr(l, env),
+        }
+    }
+
+    fn expand_syn(&mut self, syn: SynExp, env: &Env<String, Binding>) -> ItemSyn {
+        let span = syn.span();
+        if let SynExp::List(l) = syn.clone() {
+            if let Some(head) = l.sexps().first() {
+                match head {
+                    SynExp::List(_) => todo!(),
+                    SynExp::Symbol(s) => {
+                        if let Some(Binding::SyntaxTransformer { transformer, .. }) =
+                            resolve(s, env)
+                        {
+                            return match transformer(l) {
+                                Ok(res) => ItemSyn::Syn(res),
+                                Err(d) => {
+                                    self.diagnostics.extend(d);
+                                    ItemSyn::Expr(
+                                        ast::Expr {
+                                            span,
+                                            kind: ast::ExprKind::List(vec![]),
+                                        }
+                                        .into_error(),
+                                    )
+                                }
+                            };
+                        }
+                    }
+                    SynExp::Boolean(_) | SynExp::Char(_) => {}
                 }
             }
-            SynExp::Symbol(s) => match resolve(s, env) {
-                res @ (Some(Binding::Value { .. }) | None) => {
-                    let (e, d) = expand_exprs(syn.sexps(), syn.span(), env);
-                    (if res.is_some() { e } else { e.into_error() }, d)
-                }
-                Some(Binding::CoreExprTransformer { transformer, .. }) => transformer(syn, env),
-                Some(Binding::SyntaxTransformer { transformer, .. }) => {
-                    let macro_scope = Scope::new();
-                    match transformer(&syn.with_scope(macro_scope)) {
-                        Ok(mut e) => {
-                            e.flip_scope(macro_scope);
-                            expand_expr(&e, env)
+        }
+        ItemSyn::Expr(self.expand_expr(syn, env))
+    }
+
+    fn expand_list_expr(&mut self, syn: SynList, env: &Env<String, Binding>) -> ast::Expr {
+        let mut elems = syn.sexps().iter();
+        match elems.next() {
+            Some(head) => match head {
+                SynExp::List(_) => match self.expand_syn(head.to_owned(), env) {
+                    ItemSyn::Expr(e) => {
+                        let mut rest_e = self.expand_exprs_iter(elems, env);
+                        rest_e.insert(0, e);
+                        ast::Expr {
+                            span: syn.span(),
+                            kind: ast::ExprKind::List(rest_e),
                         }
-                        Err(d) => (
-                            ast::Expr {
-                                span: syn.span(),
-                                kind: ast::ExprKind::List(vec![]),
-                            }
-                            .into_error(),
-                            d,
-                        ),
                     }
-                }
-                r => todo!("{r:?}"),
-            },
-            SynExp::Boolean(_) | SynExp::Char(_) => {
-                let (exprs, mut diags) = expand_exprs(syn.sexps(), syn.span(), env);
-                diags.insert(
-                    0,
-                    Diagnostic::builder()
-                        .msg(format!(
+                    ItemSyn::Syn(_) => todo!(),
+                },
+                SynExp::Symbol(s) => match resolve(s, env) {
+                    res @ (Some(Binding::Value { .. }) | None) => {
+                        let e = self.expand_exprs(syn.sexps(), syn.span(), env);
+                        if res.is_some() {
+                            e
+                        } else {
+                            e.into_error()
+                        }
+                    }
+                    Some(Binding::CoreExprTransformer { transformer, .. }) => {
+                        transformer(self, syn, env)
+                    }
+                    Some(Binding::SyntaxTransformer { transformer, .. }) => {
+                        let macro_scope = Scope::new();
+                        match transformer(syn.with_scope(macro_scope)) {
+                            Ok(mut e) => {
+                                e.flip_scope(macro_scope);
+                                self.expand_expr(e, env)
+                            }
+                            Err(d) => {
+                                self.diagnostics.extend(d);
+                                ast::Expr {
+                                    span: syn.span(),
+                                    kind: ast::ExprKind::List(vec![]),
+                                }
+                            }
+                        }
+                    }
+                    r => todo!("{r:?}"),
+                },
+                SynExp::Boolean(_) | SynExp::Char(_) => {
+                    self.emit_error(|b| {
+                        b.msg(format!(
                             "tried to apply non-procedure {}",
                             head.red().green()
                         ))
-                        .finish(),
-                );
-                (exprs.into_error(), diags)
-            }
-        },
-        None => (
-            ast::Expr {
-                span: syn.span(),
-                kind: ast::ExprKind::Quote(Box::new(ast::Expr {
-                    span: syn.span(),
-                    kind: ast::ExprKind::List(vec![]),
-                })),
+                    });
+                    let exprs = self.expand_exprs(syn.sexps(), syn.span(), env);
+                    exprs.into_error()
+                }
             },
-            vec![Diagnostic::builder()
-                .msg("empty lists must be quoted")
-                .sources(vec![Diagnostic::builder().hint().msg("try '()").finish()])
-                .finish()],
-        ),
+            None => {
+                self.emit_error(|b| {
+                    b.msg("empty lists must be quoted")
+                        .sources(vec![Diagnostic::builder().hint().msg("try '()").finish()])
+                });
+                ast::Expr {
+                    span: syn.span(),
+                    kind: ast::ExprKind::Quote(Box::new(ast::Expr {
+                        span: syn.span(),
+                        kind: ast::ExprKind::List(vec![]),
+                    })),
+                }
+            }
+        }
     }
-}
 
-fn expand_exprs(
-    sexps: &[SynExp],
-    span: Span,
-    env: &Env<String, Binding>,
-) -> (ast::Expr, Vec<Diagnostic>) {
-    let mut exprs = vec![];
-    let mut diags = vec![];
-    for e in sexps {
-        let (expr, d) = expand_expr(e, env);
-        exprs.push(expr);
-        diags.extend(d);
-    }
-    (
+    fn expand_exprs(
+        &mut self,
+        sexps: &[SynExp],
+        span: Span,
+        env: &Env<String, Binding>,
+    ) -> ast::Expr {
+        let mut exprs = vec![];
+        for e in sexps {
+            exprs.push(self.expand_expr(e.to_owned(), env));
+        }
         ast::Expr {
             span,
             kind: ast::ExprKind::List(exprs),
-        },
-        diags,
-    )
-}
-
-fn expand_exprs_iter(
-    sexps: slice::Iter<SynExp>,
-    env: &Env<String, Binding>,
-) -> (Vec<ast::Expr>, Vec<Diagnostic>) {
-    let mut exprs = vec![];
-    let mut diags = vec![];
-    for e in sexps {
-        let (expr, d) = expand_expr(e, env);
-        exprs.push(expr);
-        diags.extend(d);
+        }
     }
-    (exprs, diags)
+
+    fn expand_exprs_iter(
+        &mut self,
+        sexps: slice::Iter<SynExp>,
+        env: &Env<String, Binding>,
+    ) -> Vec<ast::Expr> {
+        let mut exprs = vec![];
+        for e in sexps {
+            exprs.push(self.expand_expr(e.to_owned(), env));
+        }
+        exprs
+    }
+
+    fn emit_error(&mut self, builder: impl Fn(DiagnosticBuilder) -> DiagnosticBuilder) {
+        self.diagnostics
+            .push(builder(Diagnostic::builder()).finish());
+    }
 }
 
 fn resolve<'env>(var: &SynSymbol, env: &'env Env<String, Binding>) -> Option<&'env Binding> {
@@ -365,27 +456,31 @@ fn green_true() -> Rc<GreenTree> {
 }
 
 #[allow(dead_code)]
-fn let_transformer(syn: &SynList) -> Result<SynExp, Vec<Diagnostic>> {
+fn let_transformer(syn: SynList) -> Result<SynExp, Vec<Diagnostic>> {
     let sexps_len = syn.sexps().len();
-    let mut l = syn.sexps().iter();
+    let (sexps, _) = syn.into_parts();
+    let mut l = sexps.into_iter();
     assert!(l.next().is_some());
-    let binssyn = l.next().and_then(SynExp::list).ok_or_else(|| {
+    let binssyn = l.next().and_then(|s| s.into_list().ok()).ok_or_else(|| {
         vec![Diagnostic::builder()
             .msg("expected a list of bindings")
             .finish()]
     })?;
-    let bindings = binssyn
-        .sexps()
-        .iter()
+    let (sexps, _) = binssyn.into_parts();
+    let bindings = sexps
+        .into_iter()
         .map(|s| {
-            s.list()
+            s.into_list()
                 .map(|l| {
-                    let mut ls = l.sexps().iter();
-                    let b = (ls.next().unwrap().symbol().unwrap(), ls.next().unwrap());
+                    let mut ls = l.into_parts().0.into_iter();
+                    let b = (
+                        ls.next().unwrap().into_symbol().unwrap(),
+                        ls.next().unwrap(),
+                    );
                     assert!(ls.next().is_none());
                     b
                 })
-                .ok_or_else(|| {
+                .map_err(|_| {
                     vec![Diagnostic::builder()
                         .msg("expected a list of variable expression")
                         .finish()]
@@ -447,7 +542,7 @@ fn let_transformer(syn: &SynList) -> Result<SynExp, Vec<Diagnostic>> {
 }
 
 #[allow(dead_code)]
-fn or_transformer(syn: &SynList) -> Result<SynExp, Vec<Diagnostic>> {
+fn or_transformer(syn: SynList) -> Result<SynExp, Vec<Diagnostic>> {
     let sexps_len = syn.sexps().len();
     let mut sexps = syn.sexps().iter();
     assert!(sexps.next().is_some());
@@ -543,17 +638,25 @@ thread_local! {
 mod tests {
     use expect_test::{expect, Expect};
 
-    use crate::{
-        file::FileId,
-        syntax::{cst::SynRoot, parser::parse_str},
-    };
+    use crate::syntax::{cst::SynRoot, parser::parse_str};
 
     use super::{
         transformers::{if_core_transformer, lambda_core_transformer},
         *,
     };
 
-    fn root_env() -> Env<'static, String, Binding> {
+    fn intrinsics_env() -> Env<'static, String, Binding> {
+        let mut intrinsics = Env::new();
+        intrinsics.insert(
+            String::from("import"),
+            Binding::Import {
+                scopes: Scopes::core(),
+            },
+        );
+        intrinsics.enter_consume()
+    }
+
+    fn core_env() -> Env<'static, String, Binding> {
         let mut core = Env::new();
         core.insert(
             String::from("lambda"),
@@ -579,7 +682,11 @@ mod tests {
                 name: None,
             },
         );
-        let mut root = core.enter_consume();
+        core
+    }
+
+    fn root_env() -> Env<'static, String, Binding> {
+        let mut root = core_env().enter_consume();
         root.insert(
             String::from("let"),
             Binding::SyntaxTransformer {
@@ -602,11 +709,15 @@ mod tests {
     fn check(input: &str, expected: Expect) {
         let res = parse_str(input);
         assert_eq!(res.diagnostics, vec![]);
-        let red = SynRoot::new(&res.tree, FileId::default());
+        let red = SynRoot::new(&res.tree, res.file_id);
         let mut children = red.syn_children();
         let env = root_env();
-        let (ast, errs) = expand_expr(&children.next().expect("expected an item"), &env);
-        assert_eq!(errs, vec![]);
+        let mut expander = Expander {
+            import: &|_| panic!(),
+            diagnostics: vec![],
+        };
+        let ast = expander.expand_expr(children.next().expect("expected an item"), &env);
+        assert_eq!(expander.diagnostics, vec![]);
         expected.assert_debug_eq(&ast);
     }
 
@@ -872,12 +983,12 @@ mod tests {
         let res = parse_str("(let ([x #t]) x)");
         assert_eq!(res.diagnostics, vec![]);
         let red = RedTree::new(&res.tree);
-        let root = SynRoot::new_red(&red, FileId::default());
+        let root = SynRoot::new_red(&red, res.file_id);
         let children = root.children();
-        let or = dbg!(SynExp::cast(&children[0], FileId::default()).unwrap());
-        let out = let_transformer(or.list().unwrap()).unwrap();
+        let or = SynExp::cast(&children[0], res.file_id).unwrap();
+        let out = let_transformer(or.into_list().unwrap()).unwrap();
         assert_eq!(out.to_string(), "((lambda (x) x) #t)");
-        assert_eq!(out.list().unwrap().syn_string(), "((lambda (x) x) #t)");
+        assert_eq!(out.into_list().unwrap().syn_string(), "((lambda (x) x) #t)");
     }
 
     #[test]
@@ -885,10 +996,10 @@ mod tests {
         let res = parse_str("(or)");
         assert_eq!(res.diagnostics, vec![]);
         let red = RedTree::new(&res.tree);
-        let root = SynRoot::new_red(&red, FileId::default());
+        let root = SynRoot::new_red(&red, res.file_id);
         let children = root.children();
-        let or = dbg!(SynExp::cast(&children[0], FileId::default()).unwrap());
-        let out = or_transformer(or.list().unwrap()).unwrap();
+        let or = dbg!(SynExp::cast(&children[0], res.file_id).unwrap());
+        let out = or_transformer(or.into_list().unwrap()).unwrap();
         assert_eq!(out.to_string(), "#t");
         assert_eq!(out.syn_string(), "#t");
     }
@@ -898,10 +1009,10 @@ mod tests {
         let res = parse_str("(or #f)");
         assert_eq!(res.diagnostics, vec![]);
         let red = RedTree::new(&res.tree);
-        let root = SynRoot::new_red(&red, FileId::default());
+        let root = SynRoot::new_red(&red, res.file_id);
         let children = root.children();
-        let or = dbg!(SynExp::cast(&children[0], FileId::default()).unwrap());
-        let out = or_transformer(or.list().unwrap()).unwrap();
+        let or = dbg!(SynExp::cast(&children[0], res.file_id).unwrap());
+        let out = or_transformer(or.into_list().unwrap()).unwrap();
         assert_eq!(out.to_string(), "#f");
         assert_eq!(out.syn_string(), "#f");
     }
@@ -911,11 +1022,91 @@ mod tests {
         let res = parse_str(r"(or #\0 #\1)");
         assert_eq!(res.diagnostics, vec![]);
         let red = RedTree::new(&res.tree);
-        let root = SynRoot::new_red(&red, FileId::default());
+        let root = SynRoot::new_red(&red, res.file_id);
         let children = root.children();
-        let or = dbg!(SynExp::cast(&children[0], FileId::default()).unwrap());
-        let out = or_transformer(or.list().unwrap()).unwrap();
+        let or = dbg!(SynExp::cast(&children[0], res.file_id).unwrap());
+        let out = or_transformer(or.into_list().unwrap()).unwrap();
         assert_eq!(out.to_string(), r"(let ((x #\0)) (if x x (or #\1)))");
         assert_eq!(out.syn_string(), r"(let ((x #\0)) (if x x (or #\1)))");
+    }
+
+    mod modules {
+        use super::*;
+
+        fn importer(module_name: ModuleName) -> Result<Rc<ModuleInterface>, Diagnostic> {
+            assert_eq!("(cafe expander intrinsics ())", module_name.to_string());
+
+            Ok(Rc::new(ModuleInterface {
+                span: Span::dummy(),
+                name: ModuleName {
+                    paths: vec!["cafe".into(), "intrinsics".into(), "expander".into()],
+                    versions: vec![],
+                },
+                bindings: core_env(),
+            }))
+        }
+
+        fn check(input: &str, expected: Expect) {
+            let res = parse_str(input);
+            assert_eq!(res.diagnostics, vec![]);
+            let syn = SynRoot::new(&res.tree, res.file_id);
+            let env = intrinsics_env();
+            let res = expand_root(syn, &env, importer);
+            assert_eq!(res.diagnostics, vec![]);
+            expected.assert_debug_eq(&res.module);
+        }
+
+        #[test]
+        fn define_and_use_variable() {
+            check(
+                r"(import (cafe expander intrinsics ()))
+                  (define id (lambda (x) x))
+                  (id #t)",
+                expect![[r#"
+                    mod@0:0..24
+                      {#t 0:0..2}
+                      {#\a 0:21..3}
+                "#]],
+            );
+        }
+
+        #[test]
+        fn multiple_expressions() {
+            check(
+                r"#t
+                  #\a",
+                expect![[r#"
+                    mod@0:0..24
+                      {#t 0:0..2}
+                      {#\a 0:21..3}
+                "#]],
+            );
+        }
+
+        #[test]
+        fn import_intrinsics() {
+            check(
+                "(import (cafe expander intrinsics ()))
+                 (lambda (x) x)",
+                expect![[r#"
+                    mod@0:0..70
+                      {λ 0:56..14
+                        ({|x 1| 0:65..1})
+                        #f
+                        {var |x 1| 0:68..1}}
+                "#]],
+            );
+            check(
+                "(import (cafe expander intrinsics ()))
+                 (if #t #f)",
+                expect![[r#"
+                    mod@0:0..66
+                      {if 0:56..10
+                        {#t 0:60..2}
+                        {#f 0:63..2}
+                        {void 0:56..10}}
+                "#]],
+            );
+        }
     }
 }

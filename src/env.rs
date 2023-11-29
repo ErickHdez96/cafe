@@ -1,8 +1,15 @@
-use std::{borrow::Borrow, collections::HashMap, hash::Hash, ops};
+use std::{
+    borrow::Borrow,
+    collections::{hash_map, HashMap},
+    hash::Hash,
+    ops,
+    rc::Rc,
+};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum Parent<'parent, T> {
     Owned(Box<T>),
+    Rc(Rc<T>),
     Ref(&'parent T),
 }
 
@@ -12,6 +19,7 @@ impl<T> ops::Deref for Parent<'_, T> {
     fn deref(&self) -> &Self::Target {
         match self {
             Parent::Owned(o) => o,
+            Parent::Rc(r) => r,
             Parent::Ref(r) => r,
         }
     }
@@ -28,6 +36,61 @@ impl<K, V> Default for Env<'_, K, V> {
         Self {
             parent: None,
             bindings: HashMap::default(),
+        }
+    }
+}
+
+impl<K, V> Hash for Env<'_, K, V>
+where
+    K: Hash,
+    V: Hash,
+{
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.parent.hash(state);
+        for (k, v) in &self.bindings {
+            k.hash(state);
+            v.hash(state);
+        }
+    }
+}
+
+impl<K, V> PartialEq for Env<'_, K, V>
+where
+    K: Hash + Eq,
+    V: PartialEq,
+{
+    fn eq(&self, other: &Self) -> bool {
+        self.parent == other.parent
+            && self.bindings.keys().len() == other.bindings.keys().len()
+            && self
+                .bindings
+                .iter()
+                .all(|(k, v)| other.bindings.get(k) == Some(v))
+    }
+}
+
+impl<K, V> Eq for Env<'_, K, V>
+where
+    K: Hash + Eq,
+    V: PartialEq,
+{
+}
+
+impl<K, V> Env<'static, K, V> {
+    #[must_use]
+    pub fn from_rc(rc: Rc<Self>) -> Self {
+        Self {
+            parent: Some(Parent::Rc(rc)),
+            ..Default::default()
+        }
+    }
+}
+
+impl<K, V> Env<'static, K, V> {
+    pub fn with_bindings(bindings: HashMap<K, V>) -> Env<'static, K, V> {
+        Self {
+            bindings,
+            ..Default::default()
         }
     }
 }
@@ -51,6 +114,10 @@ impl<'p, K, V> Env<'p, K, V> {
             parent: Some(Parent::Ref(self)),
             ..Default::default()
         }
+    }
+
+    pub fn into_bindings(self) -> HashMap<K, V> {
+        self.bindings
     }
 }
 
@@ -94,5 +161,9 @@ where
             c = s.parent.as_deref();
         }
         bindings
+    }
+
+    pub fn bindings(&self) -> hash_map::Iter<K, V> {
+        self.bindings.iter()
     }
 }

@@ -57,6 +57,10 @@ impl RedTree {
     pub fn kind(&self) -> SyntaxKind {
         self.green.kind()
     }
+
+    pub fn text_length(&self) -> usize {
+        self.green.text_length()
+    }
 }
 
 impl fmt::Display for RedTree {

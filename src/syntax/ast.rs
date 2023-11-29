@@ -1,10 +1,77 @@
 use std::fmt;
 
-use crate::span::Span;
+use crate::{env::Env, expander::Binding, span::Span};
 
 const INDENTATION_WIDTH: usize = 2;
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ModuleName {
+    pub paths: Vec<String>,
+    pub versions: Vec<usize>,
+}
+
+impl fmt::Display for ModuleName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "({} ({}))",
+            self.paths.join(" "),
+            self.versions
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(" ")
+        )
+    }
+}
+
+#[derive(Debug, Clone, Hash)]
+pub struct ModuleInterface {
+    pub span: Span,
+    pub name: ModuleName,
+    // TODO: bring Binding here
+    pub bindings: Env<'static, String, Binding>,
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct Module {
+    pub span: Span,
+    pub items: Vec<Item>,
+    pub bindings: Env<'static, String, Binding>,
+}
+
+impl fmt::Debug for Module {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if f.alternate() {
+            let width = f.width().unwrap_or_default();
+            let padding = " ".repeat(width);
+            write!(
+                f,
+                "{padding}mod@{}{}",
+                self.span,
+                if self.items.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        "\n{}",
+                        self.items
+                            .iter()
+                            .map(|i| format!("{i:#width$?}", width = width + INDENTATION_WIDTH))
+                            .collect::<Vec<_>>()
+                            .join("\n"),
+                    )
+                }
+            )
+        } else {
+            f.debug_struct("Module")
+                .field("span", &self.span)
+                .field("items", &self.items)
+                .finish()
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Ident {
     pub span: Span,
     pub value: String,
@@ -24,32 +91,46 @@ impl fmt::Debug for Ident {
     }
 }
 
-#[derive(Clone, PartialEq, Eq)]
-pub enum DefExpr {
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub enum Item {
     Expr(Expr),
 }
 
-impl fmt::Debug for DefExpr {
+impl Item {
+    pub fn span(&self) -> Span {
+        match self {
+            Item::Expr(e) => e.span,
+        }
+    }
+}
+
+impl fmt::Debug for Item {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if f.alternate() {
             match self {
-                DefExpr::Expr(e) => e.fmt(f),
+                Item::Expr(e) => e.fmt(f),
             }
         } else {
             match self {
-                DefExpr::Expr(e) => f.debug_tuple("DefExpr::Expr").field(&e).finish(),
+                Item::Expr(e) => f.debug_tuple("DefExpr::Expr").field(&e).finish(),
             }
         }
     }
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct Define {
+    pub span: Span,
+    pub name: Ident,
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Expr {
     pub span: Span,
     pub kind: ExprKind,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ExprKind {
     Quote(Box<Expr>),
     If(Box<Expr>, Box<Expr>, Box<Expr>),
@@ -62,7 +143,7 @@ pub enum ExprKind {
     Boolean(bool),
     Char(char),
     Var(Ident),
-    Error(Box<DefExpr>),
+    Error(Box<Item>),
     Void,
 }
 
@@ -71,7 +152,7 @@ impl Expr {
     pub fn into_error(self) -> Self {
         Self {
             span: self.span,
-            kind: ExprKind::Error(Box::new(DefExpr::Expr(self))),
+            kind: ExprKind::Error(Box::new(Item::Expr(self))),
         }
     }
 }

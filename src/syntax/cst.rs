@@ -42,10 +42,25 @@ impl SynRoot {
         RedTree::children(&self.red)
     }
 
+    pub fn syn_children_with_scope(&self, scope: Scope) -> impl iter::Iterator<Item = SynExp> + '_ {
+        self.children()
+            .into_iter()
+            .filter_map(move |c| SynExp::cast(&c, self.file_id).map(|s| s.with_scope(scope)))
+    }
+
     pub fn syn_children(&self) -> impl iter::Iterator<Item = SynExp> + '_ {
         self.children()
             .into_iter()
             .filter_map(|c| SynExp::cast(&c, self.file_id))
+    }
+
+    pub fn span(&self) -> Span {
+        Span {
+            file_id: self.file_id,
+            offset: self.red.offset().try_into().unwrap(),
+            // TODO: too big files won't work
+            len: self.red.text_length().try_into().unwrap(),
+        }
     }
 
     pub fn file_id(&self) -> FileId {
@@ -53,7 +68,7 @@ impl SynRoot {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SynExp {
     List(SynList),
     Symbol(SynSymbol),
@@ -117,10 +132,10 @@ impl SynExp {
         }
     }
 
-    pub fn list(&self) -> Option<&SynList> {
+    pub fn into_list(self) -> Result<SynList, Self> {
         match self {
-            SynExp::List(l) => Some(l),
-            SynExp::Boolean(_) | SynExp::Char(_) | SynExp::Symbol(_) => None,
+            SynExp::List(l) => Ok(l),
+            SynExp::Boolean(_) | SynExp::Char(_) | SynExp::Symbol(_) => Err(self),
         }
     }
 
@@ -138,10 +153,10 @@ impl SynExp {
         }
     }
 
-    pub fn symbol(&self) -> Option<&SynSymbol> {
+    pub fn into_symbol(self) -> Result<SynSymbol, Self> {
         match self {
-            SynExp::Symbol(s) => Some(s),
-            SynExp::Char(_) | SynExp::Boolean(_) | SynExp::List(_) => None,
+            SynExp::Symbol(s) => Ok(s),
+            SynExp::Char(_) | SynExp::Boolean(_) | SynExp::List(_) => Err(self),
         }
     }
 
@@ -201,7 +216,7 @@ impl fmt::Display for SynExp {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SynList {
     red: Rc<RedTree>,
     pub(crate) sexps: Vec<SynExp>,
@@ -331,7 +346,7 @@ impl fmt::Display for SynList {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SynBoolean {
     red: Rc<RedTree>,
     file_id: FileId,
@@ -389,7 +404,7 @@ impl fmt::Display for SynBoolean {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SynChar {
     red: Rc<RedTree>,
     file_id: FileId,
@@ -447,7 +462,7 @@ impl fmt::Display for SynChar {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SynSymbol {
     red: Rc<RedTree>,
     scopes: Scopes,
