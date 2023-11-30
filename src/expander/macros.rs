@@ -591,7 +591,7 @@ mod tests {
             transformers::{if_core_transformer, lambda_core_transformer},
         },
         file::FileId,
-        syntax::{cst::SynRoot, parser::parse_str},
+        syntax::{ast::ModuleName, cst::SynRoot, parser::parse_str},
     };
 
     use super::*;
@@ -618,6 +618,10 @@ mod tests {
             String::from("cons"),
             Binding::Value {
                 scopes: Scopes::core(),
+                orig_module: ModuleName {
+                    paths: vec!["<script>".to_string()],
+                    versions: vec![],
+                },
                 orig_name: String::from("cons"),
                 name: None,
             },

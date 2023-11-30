@@ -105,6 +105,31 @@ impl fmt::Debug for Ident {
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
+pub struct Path {
+    pub span: Span,
+    pub module: ModuleName,
+    pub value: String,
+}
+
+impl fmt::Debug for Path {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if f.alternate() {
+            let padding = " ".repeat(f.width().unwrap_or_default());
+            write!(
+                f,
+                "{padding}{{|{}| {} {}}}",
+                self.value, self.module, self.span
+            )
+        } else {
+            f.debug_struct("Ident")
+                .field("span", &self.span)
+                .field("value", &self.value)
+                .finish()
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Item {
     Define(Define),
     Expr(Expr),
@@ -187,7 +212,7 @@ pub enum ExprKind {
     List(Vec<Expr>),
     Boolean(bool),
     Char(char),
-    Var(Ident),
+    Var(Path),
     Error(Box<Item>),
     Void,
 }
@@ -241,8 +266,12 @@ impl fmt::Debug for Expr {
                         self.span,
                     )
                 }
-                ExprKind::Var(id) => {
-                    write!(f, "{indentation}{{var |{}| {}}}", id.value, self.span)
+                ExprKind::Var(path) => {
+                    write!(
+                        f,
+                        "{indentation}{{var |{}| {} {}}}",
+                        path.value, path.module, self.span
+                    )
                 }
                 ExprKind::Lambda {
                     formals,

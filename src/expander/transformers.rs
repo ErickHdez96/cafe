@@ -28,6 +28,7 @@ pub fn module(expander: &mut Expander, syn: SynList) {
         });
         return;
     };
+    expander.enter_module(name.clone());
 
     let mut exports = vec![];
     if let Some(SynExp::List(l)) = sexps.next() {
@@ -54,7 +55,7 @@ pub fn module(expander: &mut Expander, syn: SynList) {
         });
     }
 
-    let root_scope = Scope::new();
+    let module_scope = Scope::new();
     let mut bindings = Env::new();
     let mut deferred = vec![];
     let intrinsics = (expander.import)(ModuleName {
@@ -70,8 +71,9 @@ pub fn module(expander: &mut Expander, syn: SynList) {
         bindings.insert(v.clone(), b.clone());
     }
 
-    for i in sexps {
-        if let Some(def) = expander.expand_macro(i.with_scope(root_scope), &mut bindings) {
+    for mut i in sexps {
+        i.reset_scope();
+        if let Some(def) = expander.expand_macro(i.with_scope(module_scope), &mut bindings) {
             deferred.push(def);
         }
     }
@@ -108,7 +110,8 @@ pub fn module(expander: &mut Expander, syn: SynList) {
             exports: exported_bindings,
             bindings: Env::with_bindings(bindings.into_bindings()),
         },
-    )
+    );
+    expander.exit_module();
 }
 
 pub fn import(expander: &mut Expander, syn: SynList, env: &mut Env<String, Binding>) {
@@ -261,7 +264,11 @@ pub fn lambda_core_transformer(
     let mut formals = vec![];
     let mut rest = None;
     for f in &formal_binds {
-        let mut binding = Binding::new_var(f.value(), f.scopes().clone());
+        let mut binding = Binding::new_var(
+            f.value(),
+            expander.current_module().clone(),
+            f.scopes().clone(),
+        );
         binding.scopes_mut().add(lambda_scope);
         if let Binding::Value {
             orig_name, name, ..
@@ -276,7 +283,11 @@ pub fn lambda_core_transformer(
     }
 
     if let Some(r) = &rest_bind {
-        let mut binding = Binding::new_var(r.value(), r.scopes().clone());
+        let mut binding = Binding::new_var(
+            r.value(),
+            expander.current_module().clone(),
+            r.scopes().clone(),
+        );
         binding.scopes_mut().add(lambda_scope);
         if let Binding::Value {
             orig_name, name, ..

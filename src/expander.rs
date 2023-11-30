@@ -36,6 +36,8 @@ pub struct Expander<'i> {
     import: &'i dyn Fn(ModuleName) -> Result<Rc<ModuleInterface>, Diagnostic>,
     register: &'i dyn Fn(ModuleName, Module),
     diagnostics: Vec<Diagnostic>,
+    module: ModuleName,
+    module_stack: Vec<ModuleName>,
 }
 
 impl fmt::Debug for Expander<'_> {
@@ -51,6 +53,7 @@ impl fmt::Debug for Expander<'_> {
 pub enum Binding {
     Value {
         scopes: Scopes,
+        orig_module: ModuleName,
         orig_name: String,
         name: Option<String>,
     },
@@ -83,10 +86,11 @@ pub enum Binding {
 }
 
 impl Binding {
-    pub fn new_var(name: &str, scopes: Scopes) -> Self {
+    pub fn new_var(name: &str, orig_module: ModuleName, scopes: Scopes) -> Self {
         Self::Value {
             scopes,
             orig_name: name.to_string(),
+            orig_module,
             name: Some(format!("{} {}", name, Self::new_id())),
         }
     }
@@ -152,6 +156,11 @@ pub fn expand_root(
     let mut expander = Expander {
         import: &import,
         register: &register,
+        module: ModuleName {
+            paths: vec!["<script>".to_string()],
+            versions: vec![],
+        },
+        module_stack: vec![],
         diagnostics: vec![],
     };
 
@@ -264,6 +273,7 @@ impl Expander<'_> {
                                 s.value().to_string(),
                                 Binding::Value {
                                     scopes: scopes.clone(),
+                                    orig_module: self.current_module().clone(),
                                     orig_name: s.value().to_string(),
                                     name: Some(s.value().to_string()),
                                 },
@@ -312,11 +322,15 @@ impl Expander<'_> {
             },
             SynExp::Symbol(s) => match resolve(&s, env) {
                 Some(Binding::Value {
-                    orig_name, name, ..
+                    orig_name,
+                    name,
+                    orig_module,
+                    ..
                 }) => ast::Expr {
                     span,
-                    kind: ast::ExprKind::Var(ast::Ident {
+                    kind: ast::ExprKind::Var(ast::Path {
                         span,
+                        module: orig_module.clone(),
                         value: name.as_ref().unwrap_or(orig_name).to_string(),
                     }),
                 },
@@ -327,8 +341,9 @@ impl Expander<'_> {
                     });
                     ast::Expr {
                         span,
-                        kind: ast::ExprKind::Var(ast::Ident {
+                        kind: ast::ExprKind::Var(ast::Path {
                             span,
+                            module: self.current_module().clone(),
                             value: s.value().to_string(),
                         }),
                     }
@@ -468,6 +483,19 @@ impl Expander<'_> {
             exprs.push(self.expand_expr(e.to_owned(), env));
         }
         exprs
+    }
+
+    fn current_module(&self) -> &ModuleName {
+        &self.module
+    }
+
+    fn enter_module(&mut self, module: ModuleName) {
+        self.module_stack
+            .push(std::mem::replace(&mut self.module, module));
+    }
+
+    fn exit_module(&mut self) {
+        self.module = self.module_stack.pop().unwrap();
     }
 
     fn emit_error(&mut self, builder: impl Fn(DiagnosticBuilder) -> DiagnosticBuilder) {
@@ -811,6 +839,14 @@ mod tests {
             String::from("cons"),
             Binding::Value {
                 scopes: Scopes::core(),
+                orig_module: ModuleName {
+                    paths: vec![
+                        "cafe".to_string(),
+                        "expander".to_string(),
+                        "core".to_string(),
+                    ],
+                    versions: vec![],
+                },
                 orig_name: String::from("cons"),
                 name: None,
             },
@@ -848,6 +884,11 @@ mod tests {
         let mut expander = Expander {
             import: &|_| panic!(),
             register: &|_, _| panic!(),
+            module: ModuleName {
+                paths: vec!["<script>".to_string()],
+                versions: vec![],
+            },
+            module_stack: vec![],
             diagnostics: vec![],
         };
         let ast = expander.expand_expr(children.next().expect("expected an item"), &env);
@@ -970,7 +1011,7 @@ mod tests {
         check(
             "cons",
             expect![[r#"
-                {var |cons| 0:0..4}
+                {var |cons| (cafe expander core ()) 0:0..4}
             "#]],
         );
     }
@@ -981,7 +1022,7 @@ mod tests {
             r"(cons #t #f)",
             expect![[r#"
                 {list 0:0..12
-                  {var |cons| 0:1..4}
+                  {var |cons| (cafe expander core ()) 0:1..4}
                   {#t 0:6..2}
                   {#f 0:9..2}}
             "#]],
@@ -993,7 +1034,7 @@ mod tests {
                   {λ 0:1..14
                     ({|x 1| 0:10..1})
                     #f
-                    {var |x 1| 0:13..1}}
+                    {var |x 1| (<script> ()) 0:13..1}}
                   {#t 0:16..2}}
             "#]],
         );
@@ -1008,8 +1049,8 @@ mod tests {
                       {λ 0:14..14
                         ({|y 3| 0:23..1})
                         #f
-                        {var |y 3| 0:26..1}}
-                      {var |x 2| 0:29..1}}}
+                        {var |y 3| (<script> ()) 0:26..1}}
+                      {var |x 2| (<script> ()) 0:29..1}}}
                   {#t 0:33..2}}
             "#]],
         );
@@ -1045,7 +1086,7 @@ mod tests {
                 {λ 0:0..12
                   ()
                   {|x 1| 0:8..1}
-                  {var |x 1| 0:10..1}}
+                  {var |x 1| (<script> ()) 0:10..1}}
             "#]],
         );
     }
@@ -1059,7 +1100,7 @@ mod tests {
                   {λ 0:0..14
                     ({|x 1| 0:7..1})
                     #f
-                    {var |x 1| 0:14..1}}
+                    {var |x 1| (<script> ()) 0:14..1}}
                   {#t 0:9..2}}
             "#]],
         );
@@ -1087,8 +1128,8 @@ mod tests {
                     ({|x 1| 0:0..1})
                     #f
                     {if 0:0..17
-                      {var |x 1| 0:0..1}
-                      {var |x 1| 0:0..1}
+                      {var |x 1| (<script> ()) 0:0..1}
+                      {var |x 1| (<script> ()) 0:0..1}
                       {#\b 0:8..3}}}
                   {#\a 0:4..3}}
             "#]],
@@ -1104,10 +1145,10 @@ mod tests {
                       ({|x 4| 0:0..1})
                       #f
                       {if 0:0..15
-                        {var |x 4| 0:0..1}
-                        {var |x 4| 0:0..1}
-                        {var |x 2| 0:20..1}}}
-                    {var |y 3| 0:18..1}}}
+                        {var |x 4| (<script> ()) 0:0..1}
+                        {var |x 4| (<script> ()) 0:0..1}
+                        {var |x 2| (<script> ()) 0:20..1}}}
+                    {var |y 3| (<script> ()) 0:18..1}}}
             "#]],
         );
     }
@@ -1195,9 +1236,9 @@ mod tests {
                         {λ 0:62..14
                           ({|x 1| 0:71..1})
                           #f
-                          {var |x 1| 0:74..1}}}
+                          {var |x 1| (<script> ()) 0:74..1}}}
                       {list 0:96..7
-                        {var |id| 0:97..2}
+                        {var |id| (<script> ()) 0:97..2}
                         {#t 0:100..2}}
                 "#]],
             );
@@ -1214,7 +1255,7 @@ mod tests {
                 expect![[r#"
                     mod (<script> ()) @0:0..183
                       {list 0:175..8
-                        {var |id| 0:176..2}
+                        {var |id| (ID ()) 0:176..2}
                         {#\a 0:179..3}}
                 "#]],
             );
@@ -1232,7 +1273,7 @@ mod tests {
                       {λ 0:146..14
                         ({|x 1| 0:155..1})
                         #f
-                        {var |x 1| 0:158..1}}
+                        {var |x 1| (<script> ()) 0:158..1}}
                 "#]],
             );
         }
@@ -1260,7 +1301,7 @@ mod tests {
                       {λ 0:50..14
                         ({|x 1| 0:59..1})
                         #f
-                        {var |x 1| 0:62..1}}
+                        {var |x 1| (<script> ()) 0:62..1}}
                 "#]],
             );
             check(

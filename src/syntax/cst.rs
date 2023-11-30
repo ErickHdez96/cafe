@@ -210,6 +210,36 @@ impl SynExp {
         }
     }
 
+    pub fn reset_scope(&mut self) {
+        match self {
+            SynExp::List(l) => {
+                for e in l.sexps_mut().iter_mut() {
+                    e.reset_scope();
+                }
+                if let Some(dot) = &mut l.dot {
+                    dot.reset_scope();
+                }
+            }
+            SynExp::Symbol(s) => s.reset_scope(),
+            SynExp::Boolean(_) | SynExp::Char(_) => {}
+        }
+    }
+
+    pub fn add_scope(&mut self, scope: Scope) {
+        match self {
+            SynExp::List(l) => {
+                for e in l.sexps_mut().iter_mut() {
+                    e.add_scope(scope);
+                }
+                if let Some(dot) = &mut l.dot {
+                    dot.add_scope(scope);
+                }
+            }
+            SynExp::Symbol(s) => s.add_scope(scope),
+            SynExp::Boolean(_) | SynExp::Char(_) => {}
+        }
+    }
+
     pub fn flip_scope(&mut self, scope: Scope) {
         match self {
             SynExp::List(l) => l.flip_scope(scope),
@@ -542,6 +572,14 @@ impl SynSymbol {
             scopes: self.scopes.with(scope),
             file_id: self.file_id,
         }
+    }
+
+    pub fn reset_scope(&mut self) {
+        self.scopes = Scopes::core();
+    }
+
+    pub fn add_scope(&mut self, scope: Scope) {
+        self.scopes.add(scope);
     }
 
     pub fn flip_scope(&mut self, scope: Scope) {
