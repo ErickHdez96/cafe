@@ -284,10 +284,7 @@ impl<'input> Parser<'input> {
 
     fn push_delimiter(&mut self) {
         let token = self.peek_raw();
-        assert!(matches!(
-            token.kind,
-            SyntaxKind::OpenDelim | SyntaxKind::SpecialOpenDelim
-        ));
+        assert!(token.kind.is_open_delim());
         let delim = Delim::from(token.source);
         let len = token.source.len().try_into().unwrap();
         if delim == Delim::Brace && !self.config.braces {

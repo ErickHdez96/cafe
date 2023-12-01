@@ -73,6 +73,11 @@ impl SyntaxKind {
         self == SyntaxKind::Eof
     }
 
+    /// Returns `true` if self is a `SyntaxKind::OpenDelim` or `SyntaxKind::SpecialOpenDelim`.
+    pub fn is_open_delim(self) -> bool {
+        matches!(self, SyntaxKind::OpenDelim | SyntaxKind::SpecialOpenDelim)
+    }
+
     pub fn is_trivia(self) -> bool {
         matches!(
             self,

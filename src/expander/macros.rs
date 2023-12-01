@@ -586,10 +586,7 @@ mod tests {
     use expect_test::{expect, Expect};
 
     use crate::{
-        expander::{
-            scopes::Scopes,
-            transformers::{if_core_transformer, lambda_core_transformer},
-        },
+        expander::{core, scopes::Scopes},
         file::FileId,
         syntax::{ast::ModuleName, cst::SynRoot, parser::parse_str},
     };
@@ -603,7 +600,7 @@ mod tests {
             Binding::CoreExprTransformer {
                 scopes: Scopes::core(),
                 name: String::from("lambda"),
-                transformer: lambda_core_transformer,
+                transformer: core::lambda_transformer,
             },
         );
         core.insert(
@@ -611,7 +608,7 @@ mod tests {
             Binding::CoreExprTransformer {
                 scopes: Scopes::core(),
                 name: String::from("if"),
-                transformer: if_core_transformer,
+                transformer: core::if_transformer,
             },
         );
         core.insert(

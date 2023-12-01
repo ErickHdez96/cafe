@@ -22,7 +22,6 @@ pub mod core;
 pub mod intrinsics;
 pub mod macros;
 pub mod scopes;
-pub mod transformers;
 
 type CoreDefTransformer = fn(&mut Expander, SynList, &Env<String, Binding>) -> Option<ast::Define>;
 type CoreExprTransformer = fn(&mut Expander, SynList, &Env<String, Binding>) -> ast::Expr;
@@ -41,7 +40,7 @@ pub fn core_expander_interface() -> ModuleInterface {
         Binding::CoreDefTransformer {
             scopes: Scopes::core(),
             name: String::from("define"),
-            transformer: transformers::define_core_transformer,
+            transformer: core::define_transformer,
         },
     );
     core.insert(
@@ -49,7 +48,7 @@ pub fn core_expander_interface() -> ModuleInterface {
         Binding::CoreExprTransformer {
             scopes: Scopes::core(),
             name: String::from("lambda"),
-            transformer: transformers::lambda_core_transformer,
+            transformer: core::lambda_transformer,
         },
     );
     core.insert(
@@ -57,7 +56,7 @@ pub fn core_expander_interface() -> ModuleInterface {
         Binding::CoreExprTransformer {
             scopes: Scopes::core(),
             name: String::from("if"),
-            transformer: transformers::if_core_transformer,
+            transformer: core::if_transformer,
         },
     );
     core.insert(
@@ -65,7 +64,7 @@ pub fn core_expander_interface() -> ModuleInterface {
         Binding::CoreExprTransformer {
             scopes: Scopes::core(),
             name: String::from("quote"),
-            transformer: transformers::quote_core_transformer,
+            transformer: core::quote_transformer,
         },
     );
     ModuleInterface {
@@ -795,13 +794,7 @@ mod tests {
 
     use crate::syntax::{cst::SynRoot, parser::parse_str};
 
-    use super::{
-        transformers::{
-            define_core_transformer, if_core_transformer, lambda_core_transformer,
-            quote_core_transformer,
-        },
-        *,
-    };
+    use super::*;
 
     struct Libs {
         libs: RefCell<HashMap<ModuleName, Module>>,
@@ -855,7 +848,7 @@ mod tests {
             Binding::CoreDefTransformer {
                 scopes: Scopes::core(),
                 name: String::from("define"),
-                transformer: define_core_transformer,
+                transformer: core::define_transformer,
             },
         );
         core.insert(
@@ -863,7 +856,7 @@ mod tests {
             Binding::CoreExprTransformer {
                 scopes: Scopes::core(),
                 name: String::from("lambda"),
-                transformer: lambda_core_transformer,
+                transformer: core::lambda_transformer,
             },
         );
         core.insert(
@@ -871,7 +864,7 @@ mod tests {
             Binding::CoreExprTransformer {
                 scopes: Scopes::core(),
                 name: String::from("if"),
-                transformer: if_core_transformer,
+                transformer: core::if_transformer,
             },
         );
         core.insert(
@@ -879,7 +872,7 @@ mod tests {
             Binding::CoreExprTransformer {
                 scopes: Scopes::core(),
                 name: String::from("quote"),
-                transformer: quote_core_transformer,
+                transformer: core::quote_transformer,
             },
         );
         core.insert(

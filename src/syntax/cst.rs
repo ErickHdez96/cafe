@@ -367,12 +367,7 @@ impl SynList {
     pub fn expected_close_char(&self) -> char {
         match self.red.green().as_ref() {
             GreenTree::Node(n) => match n.children().iter().find_map(|c| match c.as_ref() {
-                GreenTree::Token(tok)
-                    if tok.kind() == SyntaxKind::OpenDelim
-                        || tok.kind() == SyntaxKind::SpecialOpenDelim =>
-                {
-                    Some(tok.text())
-                }
+                GreenTree::Token(tok) if tok.kind().is_open_delim() => Some(tok.text()),
                 _ => None,
             }) {
                 Some(d) => Delim::from(d).close(),
