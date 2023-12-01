@@ -31,12 +31,16 @@ pub fn root_binding_env_provider(_: &QCtx, _: ()) -> Rc<Env<'static, String, Bin
     ROOT_BINDING_ENV.with(|e| Rc::clone(&e.borrow()))
 }
 
-pub fn register_intrinsic_lib((name, lib): (ModuleName, ModuleInterface)) {
-    INTRINSIC_LIBRARIES.with(|i| i.borrow_mut().insert(name, Rc::new(lib)));
+pub fn register_intrinsic_lib(lib: ModuleInterface) {
+    INTRINSIC_LIBRARIES.with(|i| i.borrow_mut().insert(lib.name.clone(), Rc::new(lib)));
 }
 
 pub fn register_lib((name, lib): (ModuleName, Module)) {
     REGISTERED_LIBRARIES.with(|i| i.borrow_mut().insert(name, Rc::new(lib)));
+}
+
+pub fn register_module_name((name, path): (ModuleName, PathBuf)) {
+    REGISTERED_MODULE_NAMES.with(|m| m.borrow_mut().insert(name, path));
 }
 
 pub fn read_file_provider(_: &QCtx, path: PathBuf) -> Res<Rc<SourceFile>> {
@@ -62,8 +66,12 @@ pub fn parse_provider(qctx: &QCtx, path: PathBuf) -> Res<ParseResult> {
     Ok(parse_source_file(&source_file, config.parser))
 }
 
-pub fn lookup_module_name_provider(_qctx: &QCtx, _module_name: ModuleName) -> Res<PathBuf> {
-    todo!()
+pub fn lookup_module_name_provider(_qctx: &QCtx, module_name: ModuleName) -> Res<PathBuf> {
+    if let Some(path) = REGISTERED_MODULE_NAMES.with(|m| m.borrow().get(&module_name).cloned()) {
+        Ok(path)
+    } else {
+        todo!()
+    }
 }
 
 pub fn module_interface_provider(
@@ -79,14 +87,16 @@ pub fn module_interface_provider(
         if let Some(registered_lib) = registered_lib {
             Ok(Rc::new(registered_lib.to_interface()))
         } else {
-            todo!()
+            Err(Diagnostic::builder()
+                .msg(format!("module not found: {module_name}"))
+                .finish())
         }
     }
 }
 
 pub fn expand_provider(qctx: &QCtx, module_name: ModuleName) -> Res<ExpanderResult> {
     let pathbuf = qctx.lookup_module_name(module_name)?;
-    let parse_res = qctx.parse(pathbuf)?;
+    let mut parse_res = qctx.parse(pathbuf)?;
     let syn = SynRoot::new(&parse_res.tree, parse_res.file_id);
     let root_binding_env = qctx.root_binding_env(());
     let mut expander_res = expand_root(
@@ -95,7 +105,10 @@ pub fn expand_provider(qctx: &QCtx, module_name: ModuleName) -> Res<ExpanderResu
         |mname| qctx.module_interface(mname),
         |mname, module| register_lib((mname, module)),
     );
-    expander_res.diagnostics.extend(parse_res.diagnostics);
+    parse_res
+        .diagnostics
+        .extend(std::mem::take(&mut expander_res.diagnostics));
+    expander_res.diagnostics = parse_res.diagnostics;
     Ok(expander_res)
 }
 
@@ -104,5 +117,6 @@ thread_local! {
     static COMPILER_CONFIG: RefCell<Rc<CompilerConfig>> = RefCell::default();
     static ROOT_BINDING_ENV: RefCell<Rc<Env<'static, String, Binding>>> = RefCell::default();
     static INTRINSIC_LIBRARIES: RefCell<HashMap<ModuleName, Rc<ModuleInterface>>> = RefCell::default();
+    static REGISTERED_MODULE_NAMES: RefCell<HashMap<ModuleName, PathBuf>> = RefCell::default();
     static REGISTERED_LIBRARIES: RefCell<HashMap<ModuleName, Rc<Module>>> = RefCell::default();
 }

@@ -14,10 +14,12 @@ use crate::{
 };
 
 use self::{
+    intrinsics::{import, module},
     macros::NativeSyntaxTransformer,
-    transformers::{import, module},
 };
 
+pub mod core;
+pub mod intrinsics;
 pub mod macros;
 pub mod scopes;
 pub mod transformers;
@@ -30,6 +32,54 @@ type SyntaxTransformer = fn(SynList) -> Result<SynExp, Vec<Diagnostic>>;
 pub struct ExpanderResult {
     pub module: Module,
     pub diagnostics: Vec<Diagnostic>,
+}
+
+pub fn core_expander_interface() -> ModuleInterface {
+    let mut core = Env::new();
+    core.insert(
+        String::from("define"),
+        Binding::CoreDefTransformer {
+            scopes: Scopes::core(),
+            name: String::from("define"),
+            transformer: transformers::define_core_transformer,
+        },
+    );
+    core.insert(
+        String::from("lambda"),
+        Binding::CoreExprTransformer {
+            scopes: Scopes::core(),
+            name: String::from("lambda"),
+            transformer: transformers::lambda_core_transformer,
+        },
+    );
+    core.insert(
+        String::from("if"),
+        Binding::CoreExprTransformer {
+            scopes: Scopes::core(),
+            name: String::from("if"),
+            transformer: transformers::if_core_transformer,
+        },
+    );
+    core.insert(
+        String::from("quote"),
+        Binding::CoreExprTransformer {
+            scopes: Scopes::core(),
+            name: String::from("quote"),
+            transformer: transformers::quote_core_transformer,
+        },
+    );
+    ModuleInterface {
+        span: Span::dummy(),
+        name: ModuleName {
+            paths: vec![
+                String::from("rnrs"),
+                String::from("expander"),
+                String::from("core"),
+            ],
+            versions: vec![],
+        },
+        bindings: core,
+    }
 }
 
 pub struct Expander<'i> {
@@ -156,17 +206,14 @@ pub fn expand_root(
     let mut expander = Expander {
         import: &import,
         register: &register,
-        module: ModuleName {
-            paths: vec!["<script>".to_string()],
-            versions: vec![],
-        },
+        module: ModuleName::script(),
         module_stack: vec![],
         diagnostics: vec![],
     };
 
     let name = ModuleName {
         paths: vec![
-            String::from("cafe"),
+            String::from("rnrs"),
             String::from("expander"),
             String::from("intrinsics"),
         ],
@@ -210,7 +257,7 @@ impl Expander<'_> {
         let mut deferred = vec![];
         let intrinsics = (self.import)(ModuleName {
             paths: vec![
-                String::from("cafe"),
+                String::from("rnrs"),
                 String::from("expander"),
                 String::from("intrinsics"),
             ],
@@ -238,10 +285,7 @@ impl Expander<'_> {
         ExpanderResult {
             module: Module {
                 span: syn.span(),
-                name: ModuleName {
-                    paths: vec![String::from("<script>")],
-                    versions: vec![],
-                },
+                name: ModuleName::script(),
                 items,
                 exports: Env::default(),
                 bindings: Env::with_bindings(bindings.into_bindings()),
@@ -337,7 +381,7 @@ impl Expander<'_> {
                 _ => {
                     self.emit_error(|b| {
                         b.span(span)
-                            .msg(format!("undefined variable {}", s.value()))
+                            .msg(format!("undefined variable `{}`", s.value()))
                     });
                     ast::Expr {
                         span,
@@ -432,8 +476,8 @@ impl Expander<'_> {
                 },
                 SynExp::Boolean(_) | SynExp::Char(_) => {
                     self.emit_error(|b| {
-                        b.msg(format!(
-                            "tried to apply non-procedure {}",
+                        b.span(head.span()).msg(format!(
+                            "tried to apply non-procedure `{}`",
                             head.red().green()
                         ))
                     });
@@ -442,17 +486,18 @@ impl Expander<'_> {
                 }
             },
             None => {
-                self.emit_error(|b| {
-                    b.msg("empty lists must be quoted")
-                        .sources(vec![Diagnostic::builder().hint().msg("try '()").finish()])
-                });
+                if syn.has_close_delim() {
+                    self.emit_error(|b| {
+                        b.msg("empty lists must be quoted")
+                            .span(syn.span())
+                            .related(vec![Diagnostic::builder().hint().msg("try '()").finish()])
+                    });
+                }
                 ast::Expr {
                     span: syn.span(),
-                    kind: ast::ExprKind::Quote(Box::new(ast::Expr {
-                        span: syn.span(),
-                        kind: ast::ExprKind::List(vec![]),
-                    })),
+                    kind: ast::ExprKind::List(vec![]),
                 }
+                .into_quote()
             }
         }
     }
@@ -516,7 +561,6 @@ fn resolve<'env>(var: &SynSymbol, env: &'env Env<String, Binding>) -> Option<&'e
         .0
 }
 
-#[allow(dead_code)]
 fn green_list(children: Vec<Rc<GreenTree>>) -> Rc<GreenTree> {
     let mut out = vec![green_open()];
     let len = children.len();
@@ -530,29 +574,22 @@ fn green_list(children: Vec<Rc<GreenTree>>) -> Rc<GreenTree> {
     Rc::new(GreenTree::node(SyntaxKind::List, out))
 }
 
-#[allow(dead_code)]
-fn syn_list(children: Vec<Rc<GreenTree>>) -> Rc<GreenTree> {
-    Rc::new(GreenTree::node(SyntaxKind::List, children))
-}
-
 fn green_atom(atom: Rc<GreenTree>) -> Rc<GreenTree> {
     Rc::new(GreenTree::node(SyntaxKind::Atom, vec![atom]))
 }
 
 fn green_open() -> Rc<GreenTree> {
-    green_atom(Rc::new(GreenTree::token(SyntaxKind::OpenDelim, "(".into())))
+    Rc::new(GreenTree::token(SyntaxKind::OpenDelim, "(".into()))
 }
 
 fn green_close() -> Rc<GreenTree> {
-    green_atom(Rc::new(GreenTree::token(SyntaxKind::OpenDelim, ")".into())))
+    Rc::new(GreenTree::token(SyntaxKind::OpenDelim, ")".into()))
 }
 
-#[allow(dead_code)]
 fn green_ident(id: impl Into<String>) -> Rc<GreenTree> {
     green_atom(Rc::new(GreenTree::token(SyntaxKind::Identifier, id.into())))
 }
 
-#[allow(dead_code)]
 fn first_child(green: &Rc<GreenTree>) -> Rc<GreenTree> {
     match &green.as_ref() {
         GreenTree::Node(n) => Rc::clone(n.children().first().expect("expected a child")),
@@ -564,7 +601,6 @@ fn green_space() -> Rc<GreenTree> {
     Rc::new(GreenTree::token(SyntaxKind::Whitespace, " ".into()))
 }
 
-#[allow(dead_code)]
 fn green_true() -> Rc<GreenTree> {
     green_atom(Rc::new(GreenTree::token(
         SyntaxKind::True,
@@ -760,7 +796,10 @@ mod tests {
     use crate::syntax::{cst::SynRoot, parser::parse_str};
 
     use super::{
-        transformers::{define_core_transformer, if_core_transformer, lambda_core_transformer},
+        transformers::{
+            define_core_transformer, if_core_transformer, lambda_core_transformer,
+            quote_core_transformer,
+        },
         *,
     };
 
@@ -772,7 +811,7 @@ mod tests {
         fn default() -> Self {
             let core_name = ModuleName {
                 paths: vec![
-                    String::from("cafe"),
+                    String::from("rnrs"),
                     String::from("expander"),
                     String::from("core"),
                 ],
@@ -836,12 +875,20 @@ mod tests {
             },
         );
         core.insert(
+            String::from("quote"),
+            Binding::CoreExprTransformer {
+                scopes: Scopes::core(),
+                name: String::from("quote"),
+                transformer: quote_core_transformer,
+            },
+        );
+        core.insert(
             String::from("cons"),
             Binding::Value {
                 scopes: Scopes::core(),
                 orig_module: ModuleName {
                     paths: vec![
-                        "cafe".to_string(),
+                        "rnrs".to_string(),
                         "expander".to_string(),
                         "core".to_string(),
                     ],
@@ -884,10 +931,7 @@ mod tests {
         let mut expander = Expander {
             import: &|_| panic!(),
             register: &|_, _| panic!(),
-            module: ModuleName {
-                paths: vec!["<script>".to_string()],
-                versions: vec![],
-            },
+            module: ModuleName::script(),
             module_stack: vec![],
             diagnostics: vec![],
         };
@@ -1011,7 +1055,7 @@ mod tests {
         check(
             "cons",
             expect![[r#"
-                {var |cons| (cafe expander core ()) 0:0..4}
+                {var |cons| (rnrs expander core ()) 0:0..4}
             "#]],
         );
     }
@@ -1022,7 +1066,7 @@ mod tests {
             r"(cons #t #f)",
             expect![[r#"
                 {list 0:0..12
-                  {var |cons| (cafe expander core ()) 0:1..4}
+                  {var |cons| (rnrs expander core ()) 0:1..4}
                   {#t 0:6..2}
                   {#f 0:9..2}}
             "#]],
@@ -1034,7 +1078,7 @@ mod tests {
                   {λ 0:1..14
                     ({|x 1| 0:10..1})
                     #f
-                    {var |x 1| (<script> ()) 0:13..1}}
+                    {var |x 1| (#script ()) 0:13..1}}
                   {#t 0:16..2}}
             "#]],
         );
@@ -1049,8 +1093,8 @@ mod tests {
                       {λ 0:14..14
                         ({|y 3| 0:23..1})
                         #f
-                        {var |y 3| (<script> ()) 0:26..1}}
-                      {var |x 2| (<script> ()) 0:29..1}}}
+                        {var |y 3| (#script ()) 0:26..1}}
+                      {var |x 2| (#script ()) 0:29..1}}}
                   {#t 0:33..2}}
             "#]],
         );
@@ -1086,7 +1130,79 @@ mod tests {
                 {λ 0:0..12
                   ()
                   {|x 1| 0:8..1}
-                  {var |x 1| (<script> ()) 0:10..1}}
+                  {var |x 1| (#script ()) 0:10..1}}
+            "#]],
+        );
+    }
+
+    #[test]
+    fn quote() {
+        check(
+            "(quote #t)",
+            expect![[r#"
+                {quote 0:0..10
+                  {#t 0:7..2}}
+            "#]],
+        );
+        check(
+            r"(quote #\a)",
+            expect![[r#"
+                {quote 0:0..11
+                  {#\a 0:7..3}}
+            "#]],
+        );
+        check(
+            "(quote x)",
+            expect![[r#"
+                {quote 0:0..9
+                  {var |x| (()) 0:7..1}}
+            "#]],
+        );
+        check(
+            "(quote x)",
+            expect![[r#"
+                {quote 0:0..9
+                  {var |x| (()) 0:7..1}}
+            "#]],
+        );
+        check(
+            "(quote ())",
+            expect![[r#"
+                {quote 0:0..10
+                  {() 0:7..2}}
+            "#]],
+        );
+        check(
+            "(quote (x))",
+            expect![[r#"
+                {quote 0:0..11
+                  {list 0:7..3
+                    {var |x| (()) 0:8..1}}}
+            "#]],
+        );
+        check(
+            r"(quote (x ((#\λ)) . #t))",
+            expect![[r#"
+                {quote 0:0..25
+                  {dotted-list 0:7..17
+                    {var |x| (()) 0:8..1}
+                    {list 0:10..8
+                      {list 0:11..6
+                        {#\λ 0:12..4}}}
+                    .
+                    {#t 0:21..2}}}
+            "#]],
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn quote_abbrev() {
+        check(
+            "'#t",
+            expect![[r#"
+                {quote 0:0..10
+                  {#t 0:7..2}}
             "#]],
         );
     }
@@ -1100,7 +1216,7 @@ mod tests {
                   {λ 0:0..14
                     ({|x 1| 0:7..1})
                     #f
-                    {var |x 1| (<script> ()) 0:14..1}}
+                    {var |x 1| (#script ()) 0:14..1}}
                   {#t 0:9..2}}
             "#]],
         );
@@ -1128,8 +1244,8 @@ mod tests {
                     ({|x 1| 0:0..1})
                     #f
                     {if 0:0..17
-                      {var |x 1| (<script> ()) 0:0..1}
-                      {var |x 1| (<script> ()) 0:0..1}
+                      {var |x 1| (#script ()) 0:0..1}
+                      {var |x 1| (#script ()) 0:0..1}
                       {#\b 0:8..3}}}
                   {#\a 0:4..3}}
             "#]],
@@ -1145,10 +1261,10 @@ mod tests {
                       ({|x 4| 0:0..1})
                       #f
                       {if 0:0..15
-                        {var |x 4| (<script> ()) 0:0..1}
-                        {var |x 4| (<script> ()) 0:0..1}
-                        {var |x 2| (<script> ()) 0:20..1}}}
-                    {var |y 3| (<script> ()) 0:18..1}}}
+                        {var |x 4| (#script ()) 0:0..1}
+                        {var |x 4| (#script ()) 0:0..1}
+                        {var |x 2| (#script ()) 0:20..1}}}
+                    {var |y 3| (#script ()) 0:18..1}}}
             "#]],
         );
     }
@@ -1226,19 +1342,19 @@ mod tests {
         #[test]
         fn define_and_use_variable() {
             check(
-                r"(import (cafe expander core ()))
+                r"(import (rnrs expander core ()))
                   (define id (lambda (x) x))
                   (id #t)",
                 expect![[r#"
-                    mod (<script> ()) @0:0..103
+                    mod (#script ()) @0:0..103
                       {define@0:51..26
                         {|id| 0:59..2}
                         {λ 0:62..14
                           ({|x 1| 0:71..1})
                           #f
-                          {var |x 1| (<script> ()) 0:74..1}}}
+                          {var |x 1| (#script ()) 0:74..1}}}
                       {list 0:96..7
-                        {var |id| (<script> ()) 0:97..2}
+                        {var |id| (#script ()) 0:97..2}
                         {#t 0:100..2}}
                 "#]],
             );
@@ -1248,12 +1364,12 @@ mod tests {
         fn simple_module() {
             check(
                 r"(module (ID ()) (id)
-                    (import (cafe expander core ()))
+                    (import (rnrs expander core ()))
                     (define id (lambda (x) x)))
                   (import (ID ()))
                   (id #\a)",
                 expect![[r#"
-                    mod (<script> ()) @0:0..183
+                    mod (#script ()) @0:0..183
                       {list 0:175..8
                         {var |id| (ID ()) 0:176..2}
                         {#\a 0:179..3}}
@@ -1265,15 +1381,15 @@ mod tests {
         fn reexport() {
             check(
                 r"(module (rnrs base ()) (lambda)
-                    (import (cafe expander core ())))
+                    (import (rnrs expander core ())))
                   (import (rnrs base ()))
                   (lambda (x) x)",
                 expect![[r#"
-                    mod (<script> ()) @0:0..160
+                    mod (#script ()) @0:0..160
                       {λ 0:146..14
                         ({|x 1| 0:155..1})
                         #f
-                        {var |x 1| (<script> ()) 0:158..1}}
+                        {var |x 1| (#script ()) 0:158..1}}
                 "#]],
             );
         }
@@ -1284,7 +1400,7 @@ mod tests {
                 r"#t
                   #\a",
                 expect![[r#"
-                    mod (<script> ()) @0:0..24
+                    mod (#script ()) @0:0..24
                       {#t 0:0..2}
                       {#\a 0:21..3}
                 "#]],
@@ -1294,21 +1410,21 @@ mod tests {
         #[test]
         fn import_core() {
             check(
-                "(import (cafe expander core ()))
+                "(import (rnrs expander core ()))
                  (lambda (x) x)",
                 expect![[r#"
-                    mod (<script> ()) @0:0..64
+                    mod (#script ()) @0:0..64
                       {λ 0:50..14
                         ({|x 1| 0:59..1})
                         #f
-                        {var |x 1| (<script> ()) 0:62..1}}
+                        {var |x 1| (#script ()) 0:62..1}}
                 "#]],
             );
             check(
-                "(import (cafe expander core ()))
+                "(import (rnrs expander core ()))
                  (if #t #f)",
                 expect![[r#"
-                    mod (<script> ()) @0:0..60
+                    mod (#script ()) @0:0..60
                       {if 0:50..10
                         {#t 0:54..2}
                         {#f 0:57..2}

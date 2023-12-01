@@ -1,194 +1,16 @@
+use std::rc::Rc;
+
 use crate::{
     env::Env,
+    span::Span,
     syntax::{
-        ast::{self, Module, ModuleName},
-        cst::{SynExp, SynList, SynSymbol},
+        ast::{self, ModuleName},
+        cst::{GreenTree, RedTree, SynExp, SynList, SynSymbol},
+        SyntaxKind,
     },
 };
 
 use super::{scopes::Scope, Binding, Expander};
-
-pub fn module(expander: &mut Expander, syn: SynList) {
-    let syn_span = syn.span();
-    let close_delim_char = syn.close_delim_char();
-    let close_delim_span = syn.close_delim_span();
-    let (sexps, _) = syn.into_parts();
-    let mut sexps = sexps.into_iter();
-
-    let name = if let Some(sexp) = sexps.nth(1) {
-        if let Some(name) = parse_module_name(expander, sexp) {
-            name
-        } else {
-            return;
-        }
-    } else {
-        expander.emit_error(|b| {
-            b.msg(format!("expected a module name, found {close_delim_char}"))
-                .span(close_delim_span)
-        });
-        return;
-    };
-    expander.enter_module(name.clone());
-
-    let mut exports = vec![];
-    if let Some(SynExp::List(l)) = sexps.next() {
-        let (sexps, _) = l.into_parts();
-        for e in sexps {
-            match e.into_symbol() {
-                Ok(s) => {
-                    exports.push((s.value().to_string(), s.span()));
-                }
-                Err(s) => {
-                    expander.emit_error(|b| {
-                        b.msg(format!("expected an identifier, found {s}"))
-                            .span(close_delim_span)
-                    });
-                }
-            }
-        }
-    } else {
-        expander.emit_error(|b| {
-            b.msg(format!(
-                "expected a list of exported identifiers, found {close_delim_char}"
-            ))
-            .span(close_delim_span)
-        });
-    }
-
-    let module_scope = Scope::new();
-    let mut bindings = Env::new();
-    let mut deferred = vec![];
-    let intrinsics = (expander.import)(ModuleName {
-        paths: vec![
-            String::from("cafe"),
-            String::from("expander"),
-            String::from("intrinsics"),
-        ],
-        versions: vec![],
-    })
-    .unwrap();
-    for (v, b) in intrinsics.bindings.bindings() {
-        bindings.insert(v.clone(), b.clone());
-    }
-
-    for mut i in sexps {
-        i.reset_scope();
-        if let Some(def) = expander.expand_macro(i.with_scope(module_scope), &mut bindings) {
-            deferred.push(def);
-        }
-    }
-
-    let mut items = vec![];
-
-    for d in deferred {
-        if let Some(item) = expander.expand_item(d, &bindings) {
-            items.push(item);
-        }
-    }
-
-    let mut exported_bindings = Env::new();
-    for (e, span) in exports {
-        match bindings.get_immediate(&e) {
-            Some(b) => {
-                exported_bindings.insert(e, b.clone());
-            }
-            None => {
-                expander.emit_error(|b| {
-                    b.msg(format!("tried to export undefined variable {e}"))
-                        .span(span)
-                });
-            }
-        }
-    }
-
-    (expander.register)(
-        name.clone(),
-        Module {
-            span: syn_span,
-            name,
-            items,
-            exports: exported_bindings,
-            bindings: Env::with_bindings(bindings.into_bindings()),
-        },
-    );
-    expander.exit_module();
-}
-
-pub fn import(expander: &mut Expander, syn: SynList, env: &mut Env<String, Binding>) {
-    let syn_span = syn.span();
-    let close_delim_char = syn.close_delim_char();
-    let close_delim_span = syn.close_delim_span();
-    let (sexps, _) = syn.into_parts();
-    let mut sexps = sexps.into_iter();
-    assert!(sexps.next().is_some());
-
-    let name = if let Some(sexp) = sexps.next() {
-        if let Some(name) = parse_module_name(expander, sexp) {
-            name
-        } else {
-            return;
-        }
-    } else {
-        expander.emit_error(|b| {
-            b.msg(format!("expected a module name, found {close_delim_char}"))
-                .span(close_delim_span)
-        });
-        return;
-    };
-
-    match (expander.import)(name) {
-        Ok(i) => {
-            for (v, b) in i.bindings.bindings() {
-                if env.has_immediate(v) {
-                    expander.emit_error(|b| {
-                        b.msg(format!("variable {} already bound", v))
-                            .span(syn_span)
-                    });
-                } else {
-                    env.insert(v.clone(), b.clone());
-                }
-            }
-        }
-        Err(d) => {
-            expander.diagnostics.push(d);
-        }
-    }
-}
-
-fn parse_module_name(expander: &mut Expander, syn: SynExp) -> Option<ModuleName> {
-    match syn {
-        SynExp::List(l) => {
-            let mut paths = vec![];
-            for sy in l.sexps() {
-                match sy {
-                    SynExp::Symbol(s) => paths.push(String::from(s.value())),
-                    SynExp::List(l) => {
-                        if !l.sexps().is_empty() {
-                            expander.emit_error(|b| b.msg("version must be empty").span(l.span()));
-                        }
-                    }
-                    se => {
-                        expander.emit_error(|b| {
-                            b.msg(format!("expected an identifier, found {}", se))
-                                .span(l.close_delim_span())
-                        });
-                    }
-                }
-            }
-            Some(ModuleName {
-                paths,
-                versions: vec![],
-            })
-        }
-        sexp => {
-            expander.emit_error(|b| {
-                b.msg(format!("expected a module name, found {sexp}"))
-                    .span(sexp.span())
-            });
-            None
-        }
-    }
-}
 
 pub fn if_core_transformer(
     expander: &mut Expander,
@@ -196,6 +18,8 @@ pub fn if_core_transformer(
     env: &Env<String, Binding>,
 ) -> ast::Expr {
     let span = syn.span();
+    let close_delim_char = syn.expected_close_char();
+    let close_delim_span = syn.close_delim_span();
     let (sexps, _) = syn.into_parts();
     let mut children = sexps.into_iter();
     children.next();
@@ -203,24 +27,59 @@ pub fn if_core_transformer(
     let cond = match children.next() {
         Some(c) => expander.expand_expr(c, env),
         None => {
-            expander.emit_error(|b| b.msg("expected a condition").span(span));
-            ast::Expr {
+            expander.emit_error(|b| {
+                b.msg(format!(
+                    "expected a condition, found `{}`",
+                    close_delim_char
+                ))
+                .span(close_delim_span)
+            });
+            return ast::Expr {
                 span,
-                kind: ast::ExprKind::Void,
+                kind: ast::ExprKind::If(
+                    Box::new(ast::Expr {
+                        span,
+                        kind: ast::ExprKind::Void,
+                    }),
+                    Box::new(ast::Expr {
+                        span,
+                        kind: ast::ExprKind::Void,
+                    }),
+                    Box::new(ast::Expr {
+                        span,
+                        kind: ast::ExprKind::Void,
+                    }),
+                ),
             }
-            .into_error()
+            .into_error();
         }
     };
 
     let tru = match children.next() {
         Some(c) => expander.expand_expr(c, env),
         None => {
-            expander.emit_error(|b| b.msg("expected a true branch").span(span));
-            ast::Expr {
+            expander.emit_error(|b| {
+                b.msg(format!(
+                    "expected a true branch, found `{}`",
+                    close_delim_char
+                ))
+                .span(close_delim_span)
+            });
+            return ast::Expr {
                 span,
-                kind: ast::ExprKind::Void,
+                kind: ast::ExprKind::If(
+                    Box::new(cond),
+                    Box::new(ast::Expr {
+                        span,
+                        kind: ast::ExprKind::Void,
+                    }),
+                    Box::new(ast::Expr {
+                        span,
+                        kind: ast::ExprKind::Void,
+                    }),
+                ),
             }
-            .into_error()
+            .into_error();
         }
     };
 
@@ -244,6 +103,8 @@ pub fn lambda_core_transformer(
     env: &Env<String, Binding>,
 ) -> ast::Expr {
     let lambda_scope = Scope::new();
+    let close_delim_char = dbg!(&syn).expected_close_char();
+    let close_delim_span = syn.close_delim_span();
     let mut lambda_env = env.enter();
     let mut children = syn.sexps().iter();
     children.next();
@@ -255,8 +116,11 @@ pub fn lambda_core_transformer(
             expander.emit_error(|b| {
                 b
                     // fixme
-                    .msg("bad syntax, expected a formals list")
-                    .span(syn.span())
+                    .msg(format!(
+                        "expected a formals list, found `{}`",
+                        close_delim_char
+                    ))
+                    .span(close_delim_span)
             });
             (vec![], None)
         });
@@ -304,6 +168,17 @@ pub fn lambda_core_transformer(
     let body = children
         .map(|c| expander.expand_expr(c.with_scope(lambda_scope), &lambda_env))
         .collect::<Vec<_>>();
+
+    if body.is_empty() && syn.sexps().len() >= 2 {
+        expander.emit_error(|b| {
+            b.msg(format!(
+                "expected an expression, found `{}`",
+                close_delim_char
+            ))
+            .span(close_delim_span)
+        });
+    }
+
     ast::Expr {
         span: syn.span(),
         kind: ast::ExprKind::Lambda {
@@ -329,7 +204,7 @@ fn lambda_formals<'a>(
                     }
                     SynExp::List(_) | SynExp::Boolean(_) | SynExp::Char(_) => {
                         expander.emit_error(|b| {
-                            b.msg(format!("expected a formal, found {}", f.red().green()))
+                            b.msg(format!("expected a formal, found `{}`", f.red().green()))
                                 .span(f.span())
                         });
                     }
@@ -342,7 +217,7 @@ fn lambda_formals<'a>(
                     }
                     SynExp::List(_) | SynExp::Boolean(_) | SynExp::Char(_) => {
                         expander.emit_error(|b| {
-                            b.msg(format!("expected a formal, found {}", f.red().green()))
+                            b.msg(format!("expected a formal, found `{}`", f.red().green()))
                                 .span(f.span())
                         });
                     }
@@ -353,14 +228,14 @@ fn lambda_formals<'a>(
         SynExp::Symbol(s) => (vec![], Some(s)),
         SynExp::Char(c) => {
             expander.emit_error(|b| {
-                b.msg(format!("expected a list or an identifier, found {c}"))
+                b.msg(format!("expected a list or an identifier, found `{c}`"))
                     .span(c.span())
             });
             (vec![], None)
         }
         SynExp::Boolean(b) => {
             expander.emit_error(|br| {
-                br.msg(format!("expected a list or an identifier, found {b}"))
+                br.msg(format!("expected a list or an identifier, found `{b}`"))
                     .span(b.span())
             });
             (vec![], None)
@@ -374,7 +249,7 @@ pub fn define_core_transformer(
     env: &Env<String, Binding>,
 ) -> Option<ast::Define> {
     let span = syn.span();
-    let close_delim_char = syn.close_delim_char();
+    let close_delim_char = syn.expected_close_char();
     let close_delim_span = syn.close_delim_span();
     let (sexps, _) = syn.into_parts();
     let mut children = sexps.into_iter();
@@ -410,4 +285,131 @@ pub fn define_core_transformer(
     }
 
     Some(ast::Define { span, name, expr })
+}
+
+pub fn quote_core_transformer(
+    expander: &mut Expander,
+    syn: SynList,
+    _: &Env<String, Binding>,
+) -> ast::Expr {
+    let span = syn.span();
+    let red = Rc::clone(syn.red());
+    let file_id = syn.file_id();
+    let (sexps, _) = syn.into_parts();
+    let mut children = sexps.into_iter();
+    children.next();
+
+    let expr = match children.next() {
+        Some(e) => quote_expr(e),
+        None => {
+            let mut children = RedTree::children(&red).into_iter();
+            while let Some(c) = children.next() {
+                if let GreenTree::Token(tok) = c.green().as_ref() {
+                    if tok.kind().is_abbrev() {
+                        match children.find(|c| !c.kind().is_trivia()) {
+                            Some(_) => {
+                                // c can only be an error token, diagnostic should be generated by
+                                // the parser
+                            }
+                            None => {
+                                expander.emit_error(|b| {
+                                    b.msg("expected an expression to quote")
+                                        .span(Span::new(
+                                            file_id,
+                                            c.offset().try_into().unwrap(),
+                                            c.text_length().try_into().unwrap(),
+                                        ))
+                                        .show_after()
+                                });
+                            }
+                        }
+                        break;
+                    } else if matches!(
+                        tok.kind(),
+                        SyntaxKind::OpenDelim | SyntaxKind::SpecialOpenDelim
+                    ) {
+                        let last_repr = children
+                            .clone()
+                            // find `quote`
+                            .skip_while(|c| c.kind().is_trivia())
+                            // and skip it
+                            .skip(1)
+                            .find(|c| !c.kind().is_trivia());
+                        let last_span = children
+                            .reduce(|acc, cur| if cur.kind().is_trivia() { acc } else { cur })
+                            .expect("expected at least quote");
+                        expander.emit_error(|b| {
+                            b.msg(format!(
+                                "expected an expression, found {}",
+                                last_repr
+                                    .as_ref()
+                                    .map(ToString::to_string)
+                                    .unwrap_or_else(|| String::from("<eof>"))
+                            ))
+                            .span(Span::new(
+                                file_id,
+                                last_span.offset().try_into().unwrap(),
+                                last_span.text_length().try_into().unwrap(),
+                            ))
+                            .show_after_select(last_repr.is_none())
+                        });
+                        break;
+                    }
+                }
+            }
+            ast::Expr {
+                span,
+                kind: ast::ExprKind::Void,
+            }
+            .into_error()
+        }
+    };
+
+    if let Some(r) = children.next() {
+        expander.emit_error(|b| {
+            b.msg(format!("expected close identifier, found {}", r))
+                .span(r.span())
+        });
+    };
+
+    let mut expr = expr.into_quote();
+    expr.span = span;
+    expr
+}
+
+fn quote_expr(syn: SynExp) -> ast::Expr {
+    let span = syn.span();
+    match syn {
+        SynExp::List(l) => ast::Expr {
+            span,
+            kind: {
+                let (sexps, dot) = l.into_parts();
+                let sexps = sexps.into_iter().map(quote_expr).collect();
+                if let Some(dot) = dot {
+                    ast::ExprKind::DottedList(sexps, Box::new(quote_expr(*dot)))
+                } else {
+                    ast::ExprKind::List(sexps)
+                }
+            },
+        },
+        SynExp::Symbol(s) => ast::Expr {
+            span,
+            kind: ast::ExprKind::Var(ast::Path {
+                span,
+                module: ModuleName {
+                    paths: vec![],
+                    versions: vec![],
+                },
+                value: s.value().to_string(),
+            }),
+        },
+        SynExp::Boolean(b) => ast::Expr {
+            span,
+            kind: ast::ExprKind::Boolean(b.value()),
+        },
+        SynExp::Char(c) => ast::Expr {
+            span,
+            kind: ast::ExprKind::Char(c.value()),
+        },
+    }
 }

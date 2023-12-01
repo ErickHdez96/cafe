@@ -10,12 +10,22 @@ pub struct ModuleName {
     pub versions: Vec<usize>,
 }
 
+impl ModuleName {
+    pub fn script() -> Self {
+        Self {
+            paths: vec![String::from("#script")],
+            versions: vec![],
+        }
+    }
+}
+
 impl fmt::Display for ModuleName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "({} ({}))",
+            "({}{}({}))",
             self.paths.join(" "),
+            if self.paths.is_empty() { "" } else { " " },
             self.versions
                 .iter()
                 .map(ToString::to_string)
@@ -210,6 +220,7 @@ pub enum ExprKind {
         exprs: Vec<Expr>,
     },
     List(Vec<Expr>),
+    DottedList(Vec<Expr>, Box<Expr>),
     Boolean(bool),
     Char(char),
     Var(Path),
@@ -223,6 +234,14 @@ impl Expr {
         Self {
             span: self.span,
             kind: ExprKind::Error(Box::new(Item::Expr(self))),
+        }
+    }
+
+    #[must_use]
+    pub fn into_quote(self) -> Self {
+        Self {
+            span: self.span,
+            kind: ExprKind::Quote(Box::new(self)),
         }
     }
 }
@@ -245,6 +264,17 @@ impl fmt::Debug for Expr {
                         .map(|e| format!("{e:#width$?}", width = width + INDENTATION_WIDTH))
                         .collect::<Vec<_>>()
                         .join("\n"),
+                ),
+                ExprKind::DottedList(l, dot) => write!(
+                    f,
+                    "{indentation}{{dotted-list {}\n{}\n{}.\n{dot:#width$?}}}",
+                    self.span,
+                    l.iter()
+                        .map(|e| format!("{e:#width$?}", width = width + INDENTATION_WIDTH))
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                    " ".repeat(width + INDENTATION_WIDTH),
+                    width = width + INDENTATION_WIDTH
                 ),
                 ExprKind::Boolean(b) => {
                     write!(
@@ -299,9 +329,21 @@ impl fmt::Debug for Expr {
                         .join("\n"),
                 ),
                 ExprKind::Error(e) => {
-                    write!(f, "{indentation}{{error {} ({e:#?})}}", self.span)
+                    write!(
+                        f,
+                        "{indentation}{{error {} \n{e:#width$?}}}",
+                        self.span,
+                        width = width + INDENTATION_WIDTH
+                    )
                 }
-                ExprKind::Quote(_) => todo!(),
+                ExprKind::Quote(e) => {
+                    write!(
+                        f,
+                        "{indentation}{{quote {}\n{e:#width$?}}}",
+                        self.span,
+                        width = width + INDENTATION_WIDTH
+                    )
+                }
                 ExprKind::If(cond, tru, fls) => write!(
                     f,
                     "{indentation}{{if {}\n{cond:#width$?}\n{tru:#width$?}\n{fls:#width$?}}}",

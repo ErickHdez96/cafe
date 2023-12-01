@@ -3,6 +3,8 @@ use std::path::PathBuf;
 use cafe::{
     config::CompilerConfig,
     diagnostics::{emit_diagnostic, emit_diagnostics},
+    expander::core_expander_interface,
+    syntax::ast::ModuleName,
     BuildSystem,
 };
 
@@ -18,11 +20,13 @@ fn main() {
     let qctx = BuildSystem::default();
     let (config, input) = parse_args();
     qctx.feed_compiler_config(config);
+    qctx.feed_module_name((ModuleName::script(), input));
+    qctx.feed_intrinsic_lib(core_expander_interface());
 
-    match qctx.parse(input) {
-        Ok(f) => {
-            println!("{:#?}", f.tree);
-            emit_diagnostics(&qctx, &f.diagnostics);
+    match qctx.expand(ModuleName::script()) {
+        Ok(res) => {
+            println!("{:#?}", res.module);
+            emit_diagnostics(&qctx, &res.diagnostics);
         }
         Err(e) => {
             emit_diagnostic(&qctx, &e);

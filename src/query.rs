@@ -185,6 +185,11 @@ build_system! {
     ],
     inputs: [
         {
+            name: feed_module_name,
+            setter: providers::register_module_name,
+            ty: (ModuleName, PathBuf),
+        },
+        {
             name: feed_compiler_config,
             setter: providers::set_compiler_config,
             ty: CompilerConfig,
@@ -197,7 +202,7 @@ build_system! {
         {
             name: feed_intrinsic_lib,
             setter: providers::register_intrinsic_lib,
-            ty: (ModuleName, ModuleInterface),
+            ty: ModuleInterface,
         },
     ],
 }

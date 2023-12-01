@@ -86,7 +86,7 @@ fn compile_syntax_rule(
                     if let Some(n) = sexps.next() {
                         diags.push(
                             Diagnostic::builder()
-                                .msg(format!("expected {}, found {}", l.close_delim_char(), n))
+                                .msg(format!("expected {}, found {}", l.expected_close_char(), n))
                                 .span(l.close_delim_span())
                                 .finish(),
                         );
@@ -618,10 +618,7 @@ mod tests {
             String::from("cons"),
             Binding::Value {
                 scopes: Scopes::core(),
-                orig_module: ModuleName {
-                    paths: vec!["<script>".to_string()],
-                    versions: vec![],
-                },
+                orig_module: ModuleName::script(),
                 orig_name: String::from("cons"),
                 name: None,
             },
@@ -938,6 +935,50 @@ mod tests {
                             variable - e @0:192..1
                 "#]],
             );
+        }
+
+        mod expand {
+            use super::*;
+
+            fn check(macro_: &str, input: &str, expected: Expect) {
+                let res = parse_str(macro_);
+                assert_eq!(res.diagnostics, vec![]);
+                let red = SynRoot::new(&res.tree, FileId::default());
+                let mut children = red.syn_children();
+                let syn = children
+                    .next()
+                    .expect("expected an item")
+                    .into_list()
+                    .unwrap()
+                    .clone();
+                let (pattern, errs) = compile_syntax_rules(&syn, &root_env());
+                assert_eq!(errs, vec![]);
+                let res_input = parse_str(input);
+                assert_eq!(res_input.diagnostics, vec![]);
+                let red = SynRoot::new(&res_input.tree, FileId::default());
+                let mut children = red.syn_children();
+                let syn = children
+                    .next()
+                    .expect("expected an item")
+                    .into_list()
+                    .unwrap()
+                    .clone();
+                let mut expander = Expander {
+                    import: &|_| panic!(),
+                    register: &|_, _| panic!(),
+                    module: ModuleName::script(),
+                    module_stack: vec![],
+                    diagnostics: vec![],
+                };
+                let env = Env::new();
+                expected.assert_debug_eq(&pattern.expand(&mut expander, syn, &env));
+            }
+
+            #[test]
+            #[ignore]
+            fn simple_macro() {
+                check("(syntax-rules () [(_) #t])", "(or)", expect![[""]]);
+            }
         }
     }
 

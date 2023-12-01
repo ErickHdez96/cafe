@@ -303,6 +303,16 @@ impl SynList {
         &self.red
     }
 
+    pub fn has_close_delim(&self) -> bool {
+        match self.red.green().as_ref() {
+            GreenTree::Node(n) => n
+                .children()
+                .iter()
+                .any(|c| c.kind() == SyntaxKind::CloseDelim),
+            GreenTree::Token(_) => false,
+        }
+    }
+
     pub fn syn_string(&self) -> String {
         let mut out = vec![String::from("(")];
         let len = self.sexps.len();
@@ -320,6 +330,7 @@ impl SynList {
         self.file_id
     }
 
+    /// Returns the `Span` of the list.
     pub fn span(&self) -> Span {
         Span::new(
             self.file_id(),
@@ -328,7 +339,32 @@ impl SynList {
         )
     }
 
-    pub fn close_delim_char(&self) -> char {
+    /// Returns the stringr representation of the last character (or <eof>), `char` of the expected
+    /// expected closing delimiter, and the span of the last item of the list.
+    pub fn error_helpers(&self) -> (String, char, Span) {
+        (
+            self.closing_text(),
+            self.expected_close_char(),
+            self.close_delim_span(),
+        )
+    }
+
+    /// Returns the `String` representation of the closing delimiter or <eof>.
+    pub fn closing_text(&self) -> String {
+        let c = match self.red.green().as_ref() {
+            GreenTree::Node(n) => n.children().iter().find_map(|c| match c.as_ref() {
+                GreenTree::Token(tok) if tok.kind() == SyntaxKind::CloseDelim => {
+                    Some(tok.text().to_string())
+                }
+                _ => None,
+            }),
+            GreenTree::Token(_) => panic!("expected a node"),
+        };
+        c.unwrap_or_else(|| String::from("<eof>"))
+    }
+
+    /// Returns the `char` representation of the expected closing delimiter for the list.
+    pub fn expected_close_char(&self) -> char {
         match self.red.green().as_ref() {
             GreenTree::Node(n) => match n.children().iter().find_map(|c| match c.as_ref() {
                 GreenTree::Token(tok)
@@ -346,10 +382,12 @@ impl SynList {
         }
     }
 
+    /// Returns the `Span` of the closing delimiter or the last element of the list.
     pub fn close_delim_span(&self) -> Span {
-        let children = RedTree::children(&self.red);
-        let red = children
-            .last()
+        //let children = RedTree::children(&self.red);
+        let red = RedTree::children(&self.red)
+            .into_iter()
+            .reduce(|acc, tok| if tok.kind().is_trivia() { acc } else { tok })
             .expect("list must have at least one element");
         Span::new(
             self.file_id(),

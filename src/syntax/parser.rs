@@ -99,16 +99,18 @@ impl<'input> Parser<'input> {
                 break;
             }
 
-            self.datum();
+            self.datum(true);
         }
     }
 
-    fn datum(&mut self) {
+    fn datum(&mut self, bump_close_delim: bool) {
         match &self.peek().kind {
             SyntaxKind::OpenDelim => self.list(),
             SyntaxKind::CloseDelim => {
                 self.err_span("unexpected closing delimiter");
-                self.bump();
+                if bump_close_delim {
+                    self.bump();
+                }
             }
             SyntaxKind::SpecialOpenDelim => self.special_list(),
             SyntaxKind::Quote
@@ -182,7 +184,7 @@ impl<'input> Parser<'input> {
     fn dot_list(&mut self) {
         assert_eq!(self.peek().kind, SyntaxKind::Dot);
         self.bump();
-        self.datum();
+        self.datum(false);
         if self.peek().kind == SyntaxKind::CloseDelim {
             return;
         }
@@ -198,7 +200,7 @@ impl<'input> Parser<'input> {
             if self.peek().kind == SyntaxKind::CloseDelim {
                 return;
             }
-            self.datum();
+            self.datum(false);
         }
     }
 
@@ -206,7 +208,7 @@ impl<'input> Parser<'input> {
         assert!(self.peek().kind.is_abbrev());
         self.builder.start_node(SyntaxKind::Abbreviation);
         self.bump();
-        self.datum();
+        self.datum(false);
         self.builder.finish_node();
     }
 
@@ -241,14 +243,13 @@ impl<'input> Parser<'input> {
                 Delim::from(t.source)
             } else {
                 let msg = format!("expected {}, found {}", open_delim.close(), t);
-                self.err_sources(
-                    msg,
-                    vec![Diagnostic::builder()
-                        .hint()
-                        .msg("unclosed delimiter")
-                        .span(open_delim_span)
-                        .finish()],
-                );
+                self.emit_error(|b| {
+                    b.msg(msg)
+                        .show_after()
+                        .related(vec![Diagnostic::with_builder(|b| {
+                            b.hint().msg("unclosed delimiter").span(open_delim_span)
+                        })])
+                });
                 self.bump();
                 return;
             }
@@ -275,7 +276,7 @@ impl<'input> Parser<'input> {
     fn parse_until(&mut self, pred: impl Fn(&Token) -> bool) -> bool {
         let mut parsed = false;
         while !self.at_eof() && !pred(self.peek()) {
-            self.datum();
+            self.datum(false);
             parsed = true;
         }
         parsed
@@ -375,6 +376,14 @@ impl<'input> Parser<'input> {
         }
     }
 
+    fn emit_error(&mut self, builder: impl FnOnce(DiagnosticBuilder) -> DiagnosticBuilder) {
+        self.diags.push(
+            builder(Diagnostic::builder())
+                .span(self.peek_raw_span())
+                .finish(),
+        );
+    }
+
     fn err_span(&mut self, msg: impl Into<String>) {
         self.diags.push(
             Diagnostic::builder()
@@ -391,7 +400,7 @@ impl<'input> Parser<'input> {
                 .error()
                 .msg(msg)
                 .span(self.peek_raw_span())
-                .sources(sources)
+                .related(sources)
                 .finish(),
         );
     }
@@ -1150,7 +1159,8 @@ mod tests {
                 vec![Diagnostic::builder()
                     .msg("expected ), found <eof>")
                     .span(Span::new(FileId::default(), 0, 1))
-                    .sources(vec![Diagnostic::builder()
+                    .show_after()
+                    .related(vec![Diagnostic::builder()
                         .msg("unclosed delimiter")
                         .span(Span::new(FileId::default(), 0, 1))
                         .hint()
@@ -1172,7 +1182,7 @@ mod tests {
                     .error()
                     .msg("braces not supported")
                     .span(Span::new(FileId::default(), 0, 1))
-                    .sources(vec![Diagnostic::builder()
+                    .related(vec![Diagnostic::builder()
                         .hint()
                         .msg("enable braces with --extended-syntax / --allow-braces")
                         .finish()])
