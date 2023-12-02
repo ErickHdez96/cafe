@@ -1,4 +1,9 @@
-use std::{collections::HashMap, fmt};
+use std::{
+    collections::{hash_map::Entry, HashMap},
+    fmt,
+    iter::Peekable,
+    slice::Iter,
+};
 
 use crate::{
     diagnostics::Diagnostic,
@@ -130,6 +135,7 @@ fn do_compile_pattern(syn: SynExp, _diags: &mut Vec<Diagnostic>) -> Pattern {
             let (sexps, dot) = ps.into_parts();
             for p in sexps {
                 match &p {
+                    // TODO: Only allow one repeat in a pattern list
                     SynExp::Symbol(s) if s.value() == "..." => match patterns.pop() {
                         Some(p) => {
                             let pspan = p.span();
@@ -137,6 +143,7 @@ fn do_compile_pattern(syn: SynExp, _diags: &mut Vec<Diagnostic>) -> Pattern {
                         }
                         None => todo!(),
                     },
+                    // TODO: Emit diagnostic for repeated variable
                     _ => patterns.push(do_compile_pattern(p, _diags)),
                 }
             }
@@ -437,6 +444,143 @@ impl Pattern {
         do_variables(self, &mut vars, &mut repeat, 0);
         (vars, repeat)
     }
+
+    pub fn match_(&self, syn: &SynExp) -> Option<HashMap<String, MatchVariable>> {
+        match &self {
+            // _ matches everything
+            Pattern::Discard(_) => Some(HashMap::new()),
+            // a variable matches everything and stores it in a variable
+            Pattern::Variable(v) => Some(HashMap::from([(
+                v.value().to_string(),
+                MatchVariable::Variable(syn.clone()),
+            )])),
+            // a constant only matches itself
+            Pattern::Constant(c) => match (c, syn) {
+                (PatternConstant::Boolean(bl), SynExp::Boolean(br)) if bl.value() == br.value() => {
+                    Some(HashMap::new())
+                }
+                (PatternConstant::Char(cl), SynExp::Char(cr)) if cl.value() == cr.value() => {
+                    Some(HashMap::new())
+                }
+                _ => None,
+            },
+            Pattern::List(pl, _) => match syn {
+                SynExp::List(sl) => Self::match_list(pl, sl),
+                _ => None,
+            },
+            Pattern::Repeat(_, _) => panic!("must be inside a list"),
+        }
+    }
+
+    fn match_list(pl: &[Pattern], sl: &SynList) -> Option<HashMap<String, MatchVariable>> {
+        let mut vars = HashMap::new();
+        let mut pats = pl.iter().peekable();
+        // TODO: handle dot
+        let mut syns = sl.sexps().iter().peekable();
+        while let Some(pat) = pats.next() {
+            if let Pattern::Repeat(pat, _) = pat {
+                let p = pats.peek();
+                match pat.match_repeat(&mut syns, |s| match p {
+                    Some(Pattern::List(_, _)) => s.list().is_some(),
+                    Some(Pattern::Constant(PatternConstant::Boolean(_))) => s.boolean().is_some(),
+                    Some(Pattern::Constant(PatternConstant::Char(_))) => s.char().is_some(),
+                    _ => false,
+                }) {
+                    Some(v) => {
+                        vars.extend(v);
+                    }
+                    None => return None,
+                }
+            } else {
+                match syns.next() {
+                    Some(syn) => match pat.match_(syn) {
+                        Some(v) => vars.extend(v),
+                        None => return None,
+                    },
+                    // reached the end of input
+                    None => return None,
+                }
+            }
+        }
+
+        if syns.next().is_none() {
+            Some(vars)
+        } else {
+            None
+        }
+    }
+
+    fn match_repeat(
+        &self,
+        syns: &mut Peekable<Iter<SynExp>>,
+        stop: impl Fn(&SynExp) -> bool,
+    ) -> Option<HashMap<String, MatchVariable>> {
+        if let Some(syn) = syns.peek() {
+            if stop(syn) {
+                return None;
+            }
+        }
+
+        match self {
+            Pattern::Discard(_) => {
+                while let Some(syn) = syns.peek() {
+                    if stop(syn) {
+                        return None;
+                    }
+                    syns.next();
+                }
+                Some(HashMap::new())
+            }
+            Pattern::Variable(v) => {
+                let mut repeat = vec![];
+                loop {
+                    match syns.peek() {
+                        Some(s) if stop(s) => break,
+                        Some(_) => {}
+                        None => break,
+                    }
+
+                    let syn = syns.next().unwrap();
+                    repeat.push(MatchVariable::Variable(syn.clone()));
+                }
+                Some(HashMap::from([(
+                    v.value().to_string(),
+                    MatchVariable::List(repeat),
+                )]))
+            }
+            Pattern::Constant(_) => todo!(),
+            Pattern::List(pl, _) => {
+                let mut vars = HashMap::new();
+                loop {
+                    match syns.peek() {
+                        Some(s) if stop(s) => break,
+                        Some(SynExp::List(sl)) => match Self::match_list(pl, sl) {
+                            Some(res) => {
+                                syns.next();
+                                for (rk, rv) in res {
+                                    match vars.entry(rk) {
+                                        Entry::Occupied(mut o) => match o.get_mut() {
+                                            MatchVariable::Variable(v) => {
+                                                panic!("expected a list {v:?}")
+                                            }
+                                            MatchVariable::List(l) => l.push(rv),
+                                        },
+                                        Entry::Vacant(v) => {
+                                            v.insert(MatchVariable::List(vec![rv]));
+                                        }
+                                    }
+                                }
+                            }
+                            None => break,
+                        },
+                        _ => break,
+                    }
+                }
+                Some(vars)
+            }
+            Pattern::Repeat(_, _) => todo!(),
+        }
+    }
 }
 
 impl fmt::Debug for Pattern {
@@ -496,6 +640,28 @@ impl fmt::Debug for Pattern {
                     .field(&span)
                     .finish(),
             }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum MatchVariable {
+    Variable(SynExp),
+    List(Vec<MatchVariable>),
+}
+
+impl MatchVariable {
+    fn variable(&self) -> Option<&SynExp> {
+        match self {
+            MatchVariable::Variable(v) => Some(v),
+            MatchVariable::List(_) => None,
+        }
+    }
+
+    fn list(&self) -> Option<&[MatchVariable]> {
+        match self {
+            MatchVariable::Variable(_) => None,
+            MatchVariable::List(l) => Some(l.as_ref()),
         }
     }
 }
@@ -775,6 +941,343 @@ mod tests {
                             a@0:2..1
                 "#]],
             );
+        }
+
+        mod matcher {
+            use super::*;
+
+            fn check(
+                pat: &str,
+                input: &str,
+                pred: impl Fn(HashMap<String, MatchVariable>) -> bool,
+            ) {
+                let pat_res = parse_str(pat);
+                assert_eq!(pat_res.diagnostics, vec![]);
+                let red = SynRoot::new(&pat_res.tree, FileId::default());
+                let mut children = red.syn_children();
+                let syn = children.next().expect("expected an item");
+                let (pattern, errs) = compile_pattern(&syn);
+                assert_eq!(errs, vec![]);
+
+                let res = parse_str(input);
+                assert_eq!(res.diagnostics, vec![]);
+                let red = SynRoot::new(&res.tree, FileId::default());
+                let mut children = red.syn_children();
+                let syn = children.next().expect("expected an item");
+                assert!(pred(
+                    pattern.match_(&syn).expect("should have matched input")
+                ));
+            }
+
+            #[test]
+            fn wildcard() {
+                check("_", "#t", |vars| vars.is_empty());
+                check("_", "x", |vars| vars.is_empty());
+                check("_", "()", |vars| vars.is_empty());
+                check("_", "((x . y))", |vars| vars.is_empty());
+            }
+
+            #[test]
+            fn constant() {
+                check("#t", "#t", |vars| vars.is_empty());
+                check("#f", "#F", |vars| vars.is_empty());
+                check(r"#\a", r"#\a", |vars| vars.is_empty());
+                check(r"#\λ", r"#\λ", |vars| vars.is_empty());
+                check(r"#\λ", r"#\x3bb", |vars| vars.is_empty());
+                check(r"#\x3bb", r"#\λ", |vars| vars.is_empty());
+            }
+
+            #[test]
+            fn variable() {
+                check("x", "#t", |vars| {
+                    vars.len() == 1
+                        && vars
+                            .get("x")
+                            .and_then(MatchVariable::variable)
+                            .and_then(SynExp::boolean)
+                            .map(SynBoolean::value)
+                            .unwrap()
+                });
+                check("hello-world", r"#\space", |vars| {
+                    vars.len() == 1
+                        && vars
+                            .get("hello-world")
+                            .and_then(MatchVariable::variable)
+                            .and_then(SynExp::char)
+                            .map(SynChar::value)
+                            .unwrap()
+                            == ' '
+                });
+                check("x", "()", |vars| {
+                    vars.len() == 1
+                        && vars
+                            .get("x")
+                            .and_then(MatchVariable::variable)
+                            .and_then(SynExp::list)
+                            .map(|l| l.sexps().is_empty() && l.dot.is_none())
+                            .unwrap()
+                });
+            }
+
+            #[test]
+            fn list() {
+                check("(_)", "(#t)", |vars| vars.is_empty());
+                check("(_)", r"(#\a)", |vars| vars.is_empty());
+                check("(#t)", "(#t)", |vars| vars.is_empty());
+                check("(#F)", "(#f)", |vars| vars.is_empty());
+                check(r"(#\space)", r"(#\ )", |vars| vars.is_empty());
+                check("(x)", "(#t)", |vars| {
+                    vars.len() == 1
+                        && vars
+                            .get("x")
+                            .and_then(MatchVariable::variable)
+                            .and_then(SynExp::boolean)
+                            .is_some()
+                });
+                check("(x y)", r"(#t #\a)", |vars| {
+                    vars.len() == 2
+                        && vars
+                            .get("x")
+                            .and_then(MatchVariable::variable)
+                            .and_then(SynExp::boolean)
+                            .map(SynBoolean::value)
+                            .unwrap()
+                        && vars
+                            .get("y")
+                            .and_then(MatchVariable::variable)
+                            .and_then(SynExp::char)
+                            .map(SynChar::value)
+                            .unwrap()
+                            == 'a'
+                });
+                check("(x (y) z)", r"(#t (#\a) e)", |vars| {
+                    vars.len() == 3
+                        && vars
+                            .get("x")
+                            .and_then(MatchVariable::variable)
+                            .and_then(SynExp::boolean)
+                            .map(SynBoolean::value)
+                            .unwrap()
+                        && vars
+                            .get("y")
+                            .and_then(MatchVariable::variable)
+                            .and_then(SynExp::char)
+                            .map(SynChar::value)
+                            .unwrap()
+                            == 'a'
+                        && vars
+                            .get("z")
+                            .and_then(MatchVariable::variable)
+                            .and_then(SynExp::symbol)
+                            .map(SynSymbol::value)
+                            .unwrap()
+                            == "e"
+                });
+            }
+
+            #[test]
+            fn simple_repeat() {
+                check("(e ...)", "()", |vars| {
+                    vars.len() == 1
+                        && vars.get("e").and_then(MatchVariable::list).unwrap().len() == 0
+                });
+                check("(e ...)", "(#t)", |vars| {
+                    assert!(vars.len() == 1);
+                    let e = vars.get("e").and_then(MatchVariable::list).unwrap();
+                    assert!(e.len() == 1);
+                    assert!(e[0].variable().and_then(SynExp::boolean).unwrap().value());
+                    true
+                });
+                check("(e ...)", r"(#f (#\a x))", |vars| {
+                    assert!(vars.len() == 1);
+                    let e = vars.get("e").and_then(MatchVariable::list).unwrap();
+                    assert!(e.len() == 2);
+                    assert!(e[0].variable().and_then(SynExp::boolean).unwrap().value() == false);
+                    let e1 = e[1].variable().and_then(SynExp::list).unwrap();
+                    assert!(e1.dot().is_none());
+                    let sexps = e1.sexps();
+                    assert!(sexps.len() == 2);
+                    assert!(sexps[0].char().unwrap().value() == 'a');
+                    assert!(sexps[1].symbol().unwrap().value() == "x");
+                    true
+                });
+            }
+
+            #[test]
+            fn list_repeat() {
+                check("((e) ...)", "((#t) (#f))", |vars| {
+                    assert_eq!(vars.len(), 1);
+                    let el = vars.get("e").and_then(MatchVariable::list).unwrap();
+                    assert_eq!(el.len(), 2);
+                    assert_eq!(
+                        el[0]
+                            .variable()
+                            .and_then(SynExp::boolean)
+                            .map(SynBoolean::value)
+                            .unwrap(),
+                        true
+                    );
+                    assert_eq!(
+                        el[1]
+                            .variable()
+                            .and_then(SynExp::boolean)
+                            .map(SynBoolean::value)
+                            .unwrap(),
+                        false
+                    );
+                    true
+                });
+            }
+
+            #[test]
+            fn recursive_repeat() {
+                check(
+                    "((e ...) ...)",
+                    r"((#\1 #\2) (#\3 #\4 #\5) () ((#t)))",
+                    |vars| {
+                        assert_eq!(vars.len(), 1);
+
+                        let el = vars.get("e").and_then(MatchVariable::list).unwrap();
+                        assert_eq!(el.len(), 4);
+
+                        // (#\1 #\2)
+                        let el0l = &el[0].list().unwrap();
+                        assert_eq!(el0l.len(), 2);
+                        assert_eq!(
+                            el0l[0]
+                                .variable()
+                                .and_then(SynExp::char)
+                                .map(SynChar::value),
+                            Some('1'),
+                        );
+                        assert_eq!(
+                            el0l[1]
+                                .variable()
+                                .and_then(SynExp::char)
+                                .map(SynChar::value),
+                            Some('2'),
+                        );
+
+                        let el1l = &el[1].list().unwrap();
+                        assert_eq!(el1l.len(), 3);
+                        assert_eq!(
+                            el1l[0]
+                                .variable()
+                                .and_then(SynExp::char)
+                                .map(SynChar::value),
+                            Some('3'),
+                        );
+                        assert_eq!(
+                            el1l[1]
+                                .variable()
+                                .and_then(SynExp::char)
+                                .map(SynChar::value),
+                            Some('4'),
+                        );
+                        assert_eq!(
+                            el1l[2]
+                                .variable()
+                                .and_then(SynExp::char)
+                                .map(SynChar::value),
+                            Some('5'),
+                        );
+
+                        // ()
+                        let el2l = &el[2].list().unwrap();
+                        assert_eq!(el2l.len(), 0);
+
+                        // (#t)
+                        let el3l = &el[3].list().unwrap();
+                        assert_eq!(el3l.len(), 1);
+                        assert_eq!(
+                            el3l[0]
+                                .variable()
+                                .and_then(SynExp::list)
+                                .and_then(|l| {
+                                    assert_eq!(l.dot(), None);
+                                    assert_eq!(l.sexps().len(), 1);
+                                    l.sexps()[0].boolean()
+                                })
+                                .map(SynBoolean::value),
+                            Some(true)
+                        );
+
+                        true
+                    },
+                );
+            }
+
+            #[test]
+            fn simple_let() {
+                check(
+                    "(let ((v e) ...) body0 body ...)",
+                    r"(let ([x #t] [y #\a]) (display y) x)",
+                    |vars| {
+                        assert_eq!(vars.len(), 5);
+                        assert_eq!(
+                            vars.get("let")
+                                .and_then(MatchVariable::variable)
+                                .and_then(SynExp::symbol)
+                                .map(SynSymbol::value),
+                            Some("let")
+                        );
+                        let vl = vars.get("v").and_then(MatchVariable::list).unwrap();
+                        assert_eq!(vl.len(), 2);
+
+                        assert_eq!(
+                            vl[0]
+                                .variable()
+                                .and_then(SynExp::symbol)
+                                .map(SynSymbol::value),
+                            Some("x")
+                        );
+                        assert_eq!(
+                            vl[1]
+                                .variable()
+                                .and_then(SynExp::symbol)
+                                .map(SynSymbol::value),
+                            Some("y")
+                        );
+
+                        let el = vars.get("e").and_then(MatchVariable::list).unwrap();
+                        assert_eq!(el.len(), 2);
+
+                        assert_eq!(
+                            el[0]
+                                .variable()
+                                .and_then(SynExp::boolean)
+                                .map(SynBoolean::value),
+                            Some(true),
+                        );
+                        assert_eq!(
+                            el[1].variable().and_then(SynExp::char).map(SynChar::value),
+                            Some('a')
+                        );
+
+                        assert_eq!(
+                            vars.get("body0")
+                                .and_then(MatchVariable::variable)
+                                .and_then(SynExp::list)
+                                .map(|l| l.to_string())
+                                .as_deref(),
+                            Some("(display y)")
+                        );
+
+                        let bodies = vars.get("body").and_then(MatchVariable::list).unwrap();
+                        assert_eq!(bodies.len(), 1);
+
+                        assert_eq!(
+                            bodies[0]
+                                .variable()
+                                .and_then(SynExp::symbol)
+                                .map(SynSymbol::value),
+                            Some("x"),
+                        );
+
+                        true
+                    },
+                );
+            }
         }
     }
 
