@@ -114,18 +114,22 @@ impl SynExp {
                     sexps: children,
                     dot,
                     file_id,
+                    source_span: None,
                 }))
             }
             SyntaxKind::Atom => RedTree::children(red)
                 .iter()
                 .find_map(|red| match red.kind() {
                     SyntaxKind::True | SyntaxKind::False => {
-                        Some(Self::Boolean(SynBoolean::raw(red, file_id)))
+                        Some(Self::Boolean(SynBoolean::raw(red, file_id, None)))
                     }
-                    SyntaxKind::Char => Some(Self::Char(SynChar::raw(red, file_id))),
-                    SyntaxKind::Identifier => {
-                        Some(Self::Symbol(SynSymbol::raw(red, Scopes::core(), file_id)))
-                    }
+                    SyntaxKind::Char => Some(Self::Char(SynChar::raw(red, file_id, None))),
+                    SyntaxKind::Identifier => Some(Self::Symbol(SynSymbol::raw(
+                        red,
+                        Scopes::core(),
+                        file_id,
+                        None,
+                    ))),
                     _ => None,
                 }),
             _ => None,
@@ -192,13 +196,32 @@ impl SynExp {
         }
     }
 
-    pub fn span(&self) -> Span {
+    pub fn source_span(&self) -> Span {
         match self {
-            SynExp::List(l) => l.span(),
-            SynExp::Boolean(b) => b.span(),
-            SynExp::Char(c) => c.span(),
-            SynExp::Symbol(s) => s.span(),
+            SynExp::List(l) => l.source_span(),
+            SynExp::Boolean(b) => b.source_span(),
+            SynExp::Char(c) => c.source_span(),
+            SynExp::Symbol(s) => s.source_span(),
         }
+    }
+
+    pub fn set_source_span(&mut self, span: Span) {
+        match self {
+            SynExp::List(l) => l.set_source_span(span),
+            SynExp::Boolean(b) => b.set_source_span(span),
+            SynExp::Char(c) => c.set_source_span(span),
+            SynExp::Symbol(s) => s.set_source_span(span),
+        }
+    }
+
+    pub fn with_source_span(mut self, span: Span) -> Self {
+        match &mut self {
+            SynExp::List(l) => l.set_source_span(span),
+            SynExp::Boolean(b) => b.set_source_span(span),
+            SynExp::Char(c) => c.set_source_span(span),
+            SynExp::Symbol(s) => s.set_source_span(span),
+        }
+        self
     }
 
     #[must_use]
@@ -266,6 +289,7 @@ pub struct SynList {
     pub(crate) sexps: Vec<SynExp>,
     pub(crate) dot: Option<Box<SynExp>>,
     file_id: FileId,
+    source_span: Option<Span>,
 }
 
 impl SynList {
@@ -274,12 +298,14 @@ impl SynList {
         sexps: Vec<SynExp>,
         dot: Option<Box<SynExp>>,
         file_id: FileId,
+        source_span: Option<Span>,
     ) -> Self {
         Self {
             red: Rc::clone(red),
             sexps,
             dot,
             file_id,
+            source_span,
         }
     }
 
@@ -331,12 +357,18 @@ impl SynList {
     }
 
     /// Returns the `Span` of the list.
-    pub fn span(&self) -> Span {
-        Span::new(
-            self.file_id(),
-            self.red.offset().try_into().unwrap(),
-            self.red.green().text_length().try_into().unwrap(),
-        )
+    pub fn source_span(&self) -> Span {
+        self.source_span.unwrap_or_else(|| {
+            Span::new(
+                self.file_id(),
+                self.red.offset().try_into().unwrap(),
+                self.red.green().text_length().try_into().unwrap(),
+            )
+        })
+    }
+
+    fn set_source_span(&mut self, span: Span) {
+        self.source_span = Some(span);
     }
 
     /// Returns the stringr representation of the last character (or <eof>), `char` of the expected
@@ -398,6 +430,7 @@ impl SynList {
             self.sexps.iter().map(|e| e.with_scope(scope)).collect(),
             self.dot.as_ref().map(|d| Box::new(d.with_scope(scope))),
             self.file_id,
+            self.source_span,
         )
     }
 
@@ -427,14 +460,16 @@ impl fmt::Display for SynList {
 pub struct SynBoolean {
     red: Rc<RedTree>,
     file_id: FileId,
+    source_span: Option<Span>,
 }
 
 impl SynBoolean {
-    pub fn raw(red: &Rc<RedTree>, file_id: FileId) -> Self {
+    pub fn raw(red: &Rc<RedTree>, file_id: FileId, source_span: Option<Span>) -> Self {
         debug_assert!(matches!(red.kind(), SyntaxKind::True | SyntaxKind::False));
         Self {
             red: Rc::clone(red),
             file_id,
+            source_span,
         }
     }
 
@@ -443,6 +478,7 @@ impl SynBoolean {
             SyntaxKind::True | SyntaxKind::False => Some(Self {
                 red: Rc::clone(red),
                 file_id,
+                source_span: None,
             }),
             _ => None,
         }
@@ -460,12 +496,18 @@ impl SynBoolean {
         self.file_id
     }
 
-    pub fn span(&self) -> Span {
-        Span::new(
-            self.file_id(),
-            self.red.offset().try_into().unwrap(),
-            self.red.green().text_length().try_into().unwrap(),
-        )
+    pub fn source_span(&self) -> Span {
+        self.source_span.unwrap_or_else(|| {
+            Span::new(
+                self.file_id(),
+                self.red.offset().try_into().unwrap(),
+                self.red.green().text_length().try_into().unwrap(),
+            )
+        })
+    }
+
+    fn set_source_span(&mut self, span: Span) {
+        self.source_span = Some(span);
     }
 }
 
@@ -485,14 +527,16 @@ impl fmt::Display for SynBoolean {
 pub struct SynChar {
     red: Rc<RedTree>,
     file_id: FileId,
+    source_span: Option<Span>,
 }
 
 impl SynChar {
-    pub fn raw(red: &Rc<RedTree>, file_id: FileId) -> Self {
+    pub fn raw(red: &Rc<RedTree>, file_id: FileId, source_span: Option<Span>) -> Self {
         debug_assert!(matches!(red.kind(), SyntaxKind::Char));
         Self {
             red: Rc::clone(red),
             file_id,
+            source_span,
         }
     }
 
@@ -501,6 +545,7 @@ impl SynChar {
             SyntaxKind::Char => Some(Self {
                 red: Rc::clone(red),
                 file_id,
+                source_span: None,
             }),
             _ => None,
         }
@@ -518,12 +563,18 @@ impl SynChar {
         self.file_id
     }
 
-    pub fn span(&self) -> Span {
-        Span::new(
-            self.file_id(),
-            self.red.offset().try_into().unwrap(),
-            self.red.green().text_length().try_into().unwrap(),
-        )
+    pub fn source_span(&self) -> Span {
+        self.source_span.unwrap_or_else(|| {
+            Span::new(
+                self.file_id(),
+                self.red.offset().try_into().unwrap(),
+                self.red.green().text_length().try_into().unwrap(),
+            )
+        })
+    }
+
+    fn set_source_span(&mut self, span: Span) {
+        self.source_span = Some(span);
     }
 }
 
@@ -544,15 +595,22 @@ pub struct SynSymbol {
     red: Rc<RedTree>,
     scopes: Scopes,
     file_id: FileId,
+    source_span: Option<Span>,
 }
 
 impl SynSymbol {
-    pub fn raw(red: &Rc<RedTree>, scopes: Scopes, file_id: FileId) -> Self {
+    pub fn raw(
+        red: &Rc<RedTree>,
+        scopes: Scopes,
+        file_id: FileId,
+        source_span: Option<Span>,
+    ) -> Self {
         debug_assert_eq!(red.kind(), SyntaxKind::Identifier);
         Self {
             red: Rc::clone(red),
             scopes,
             file_id,
+            source_span,
         }
     }
 
@@ -581,6 +639,7 @@ impl SynSymbol {
                 red: Rc::clone(red),
                 scopes: Scopes::core(),
                 file_id,
+                source_span: None,
             }),
             _ => None,
         }
@@ -590,12 +649,14 @@ impl SynSymbol {
         self.file_id
     }
 
-    pub fn span(&self) -> Span {
-        Span::new(
-            self.file_id(),
-            self.red.offset().try_into().unwrap(),
-            self.red.green().text_length().try_into().unwrap(),
-        )
+    pub fn source_span(&self) -> Span {
+        self.source_span.unwrap_or_else(|| {
+            Span::new(
+                self.file_id(),
+                self.red.offset().try_into().unwrap(),
+                self.red.green().text_length().try_into().unwrap(),
+            )
+        })
     }
 
     #[must_use]
@@ -604,6 +665,7 @@ impl SynSymbol {
             red: Rc::clone(&self.red),
             scopes: self.scopes.with(scope),
             file_id: self.file_id,
+            source_span: self.source_span,
         }
     }
 
@@ -617,6 +679,10 @@ impl SynSymbol {
 
     pub fn flip_scope(&mut self, scope: Scope) {
         self.scopes.flip(scope);
+    }
+
+    fn set_source_span(&mut self, span: Span) {
+        self.source_span = Some(span);
     }
 }
 

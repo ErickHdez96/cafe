@@ -15,7 +15,7 @@ use super::{scopes::Scope, Binding, Expander};
 /// <exports> := ( <identifier>* )
 /// ```
 pub fn module(expander: &mut Expander, syn: SynList) {
-    let syn_span = syn.span();
+    let syn_span = syn.source_span();
     let (found_close_token, expected_close_delim, close_delim_span) = syn.error_helpers();
     let (sexps, _) = syn.into_parts();
     let mut sexps = sexps.into_iter();
@@ -45,12 +45,12 @@ pub fn module(expander: &mut Expander, syn: SynList) {
             for e in sexps {
                 match e.into_symbol() {
                     Ok(s) => {
-                        exports.push((s.value().to_string(), s.span()));
+                        exports.push((s.value().to_string(), s.source_span()));
                     }
                     Err(s) => {
                         expander.emit_error(|b| {
                             b.msg(format!("expected an identifier, found `{s}`"))
-                                .span(s.span())
+                                .span(s.source_span())
                         });
                     }
                 }
@@ -64,7 +64,11 @@ pub fn module(expander: &mut Expander, syn: SynList) {
                         .map(ToString::to_string)
                         .unwrap_or_else(|| expected_close_delim.to_string())
                 ))
-                .span(se.as_ref().map(SynExp::span).unwrap_or(close_delim_span))
+                .span(
+                    se.as_ref()
+                        .map(SynExp::source_span)
+                        .unwrap_or(close_delim_span),
+                )
             });
         }
     }
@@ -129,7 +133,7 @@ pub fn module(expander: &mut Expander, syn: SynList) {
 }
 
 pub fn import(expander: &mut Expander, syn: SynList, env: &mut Env<String, Binding>) {
-    let syn_span = syn.span();
+    let syn_span = syn.source_span();
     let close_delim_char = syn.expected_close_char();
     let close_delim_span = syn.close_delim_span();
     let (sexps, _) = syn.into_parts();
@@ -137,7 +141,7 @@ pub fn import(expander: &mut Expander, syn: SynList, env: &mut Env<String, Bindi
     assert!(sexps.next().is_some());
 
     let (name, span) = if let Some(sexp) = sexps.next() {
-        let span = sexp.span();
+        let span = sexp.source_span();
         if let Some(name) = parse_module_name(expander, sexp) {
             (name, span)
         } else {
@@ -176,7 +180,7 @@ pub fn import(expander: &mut Expander, syn: SynList, env: &mut Env<String, Bindi
 }
 
 fn parse_module_name(expander: &mut Expander, syn: SynExp) -> Option<ModuleName> {
-    let span = syn.span();
+    let span = syn.source_span();
     match syn {
         SynExp::List(l) => {
             let mut paths = vec![];
@@ -185,13 +189,15 @@ fn parse_module_name(expander: &mut Expander, syn: SynExp) -> Option<ModuleName>
                     SynExp::Symbol(s) => paths.push(String::from(s.value())),
                     SynExp::List(l) => {
                         if !l.sexps().is_empty() {
-                            expander.emit_error(|b| b.msg("version must be empty").span(l.span()));
+                            expander.emit_error(|b| {
+                                b.msg("version must be empty").span(l.source_span())
+                            });
                         }
                     }
                     se => {
                         expander.emit_error(|b| {
                             b.msg(format!("expected an identifier, found `{}`", se))
-                                .span(se.span())
+                                .span(se.source_span())
                         });
                     }
                 }
@@ -212,7 +218,7 @@ fn parse_module_name(expander: &mut Expander, syn: SynExp) -> Option<ModuleName>
         sexp => {
             expander.emit_error(|b| {
                 b.msg(format!("expected a module name, found `{sexp}`"))
-                    .span(sexp.span())
+                    .span(sexp.source_span())
             });
             None
         }

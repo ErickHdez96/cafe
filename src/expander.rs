@@ -298,7 +298,7 @@ impl Expander<'_> {
             if let Some(SynExp::Symbol(s)) = l.sexps().first() {
                 match resolve(s, env) {
                     Some(Binding::NativeSyntaxTransformer { transformer, .. }) => {
-                        let s = transformer.expand(self, l, env);
+                        let s = transformer.expand(self, l, env)?;
                         return self.expand_macro(s, env);
                     }
                     Some(Binding::Import { .. }) => {
@@ -353,7 +353,7 @@ impl Expander<'_> {
     }
 
     fn expand_expr(&mut self, syn: SynExp, env: &Env<String, Binding>) -> ast::Expr {
-        let span = syn.span();
+        let span = syn.source_span();
         match syn {
             SynExp::Boolean(b) => ast::Expr {
                 span,
@@ -397,7 +397,7 @@ impl Expander<'_> {
     }
 
     fn expand_syn(&mut self, syn: SynExp, env: &Env<String, Binding>) -> ItemSyn {
-        let span = syn.span();
+        let span = syn.source_span();
         if let SynExp::List(l) = syn.clone() {
             if let Some(head) = l.sexps().first() {
                 match head {
@@ -437,7 +437,7 @@ impl Expander<'_> {
                         let mut rest_e = self.expand_exprs_iter(elems, env);
                         rest_e.insert(0, e);
                         ast::Expr {
-                            span: syn.span(),
+                            span: syn.source_span(),
                             kind: ast::ExprKind::List(rest_e),
                         }
                     }
@@ -445,7 +445,7 @@ impl Expander<'_> {
                 },
                 SynExp::Symbol(s) => match resolve(s, env) {
                     res @ (Some(Binding::Value { .. }) | None) => {
-                        let e = self.expand_exprs(syn.sexps(), syn.span(), env);
+                        let e = self.expand_exprs(syn.sexps(), syn.source_span(), env);
                         if res.is_some() {
                             e
                         } else {
@@ -465,7 +465,7 @@ impl Expander<'_> {
                             Err(d) => {
                                 self.diagnostics.extend(d);
                                 ast::Expr {
-                                    span: syn.span(),
+                                    span: syn.source_span(),
                                     kind: ast::ExprKind::List(vec![]),
                                 }
                             }
@@ -475,12 +475,12 @@ impl Expander<'_> {
                 },
                 SynExp::Boolean(_) | SynExp::Char(_) => {
                     self.emit_error(|b| {
-                        b.span(head.span()).msg(format!(
+                        b.span(head.source_span()).msg(format!(
                             "tried to apply non-procedure `{}`",
                             head.red().green()
                         ))
                     });
-                    let exprs = self.expand_exprs(syn.sexps(), syn.span(), env);
+                    let exprs = self.expand_exprs(syn.sexps(), syn.source_span(), env);
                     exprs.into_error()
                 }
             },
@@ -488,12 +488,12 @@ impl Expander<'_> {
                 if syn.has_close_delim() {
                     self.emit_error(|b| {
                         b.msg("empty lists must be quoted")
-                            .span(syn.span())
+                            .span(syn.source_span())
                             .related(vec![Diagnostic::builder().hint().msg("try '()").finish()])
                     });
                 }
                 ast::Expr {
-                    span: syn.span(),
+                    span: syn.source_span(),
                     kind: ast::ExprKind::List(vec![]),
                 }
                 .into_quote()
@@ -653,6 +653,7 @@ fn let_transformer(syn: SynList) -> Result<SynExp, Vec<Diagnostic>> {
             &RedTree::new(&first_child(&λ)),
             Scopes::core(),
             FileId::default(),
+            None,
         )
         .into(),
         SynList::raw(
@@ -660,6 +661,7 @@ fn let_transformer(syn: SynList) -> Result<SynExp, Vec<Diagnostic>> {
             bindings.iter().map(|(b, _)| (*b).clone().into()).collect(),
             None,
             FileId::default(),
+            None,
         )
         .into(),
     ];
@@ -676,6 +678,7 @@ fn let_transformer(syn: SynList) -> Result<SynExp, Vec<Diagnostic>> {
         lambda_out_syn,
         None,
         FileId::default(),
+        None,
     )
     .into()];
     let mut app_out = vec![lambda_out.clone()];
@@ -689,6 +692,7 @@ fn let_transformer(syn: SynList) -> Result<SynExp, Vec<Diagnostic>> {
         app_out_syn,
         None,
         FileId::default(),
+        None,
     )
     .into())
 }
@@ -707,6 +711,7 @@ fn or_transformer(syn: SynList) -> Result<SynExp, Vec<Diagnostic>> {
                 &RedTree::new(&first_child(&let_)),
                 Scopes::core(),
                 FileId::default(),
+                None,
             )
             .into();
             let x = green_ident("x");
@@ -714,6 +719,7 @@ fn or_transformer(syn: SynList) -> Result<SynExp, Vec<Diagnostic>> {
                 &RedTree::new(&first_child(&x)),
                 Scopes::core(),
                 FileId::default(),
+                None,
             )
             .into();
             let if_ = green_ident("if");
@@ -721,6 +727,7 @@ fn or_transformer(syn: SynList) -> Result<SynExp, Vec<Diagnostic>> {
                 &RedTree::new(&first_child(&if_)),
                 Scopes::core(),
                 FileId::default(),
+                None,
             )
             .into();
             let or = green_ident("or");
@@ -728,6 +735,7 @@ fn or_transformer(syn: SynList) -> Result<SynExp, Vec<Diagnostic>> {
                 &RedTree::new(&first_child(&or)),
                 Scopes::core(),
                 FileId::default(),
+                None,
             )
             .into();
             let binding = green_list(vec![x.clone(), e.red().green().clone()]);
@@ -739,10 +747,12 @@ fn or_transformer(syn: SynList) -> Result<SynExp, Vec<Diagnostic>> {
                     vec![x_syn.clone(), e.clone()],
                     None,
                     FileId::default(),
+                    None,
                 )
                 .into()],
                 None,
                 FileId::default(),
+                None,
             )
             .into();
 
@@ -762,10 +772,12 @@ fn or_transformer(syn: SynList) -> Result<SynExp, Vec<Diagnostic>> {
                     if_syn,
                     x_syn.clone(),
                     x_syn,
-                    SynList::raw(&RedTree::new(&or_l), or_syn, None, FileId::default()).into(),
+                    SynList::raw(&RedTree::new(&or_l), or_syn, None, FileId::default(), None)
+                        .into(),
                 ],
                 None,
                 FileId::default(),
+                None,
             )
             .into();
             let out = vec![let_, bindings, if_l];
@@ -776,6 +788,7 @@ fn or_transformer(syn: SynList) -> Result<SynExp, Vec<Diagnostic>> {
                 out_syn,
                 None,
                 FileId::default(),
+                None,
             )
             .into())
         }

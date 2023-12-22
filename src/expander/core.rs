@@ -16,7 +16,7 @@ pub fn if_transformer(
     syn: SynList,
     env: &Env<String, Binding>,
 ) -> ast::Expr {
-    let span = syn.span();
+    let span = syn.source_span();
     let close_delim_char = syn.expected_close_char();
     let close_delim_span = syn.close_delim_span();
     let (sexps, _) = syn.into_parts();
@@ -138,7 +138,7 @@ pub fn lambda_transformer(
         } = &binding
         {
             formals.push(ast::Ident {
-                span: f.span(),
+                span: f.source_span(),
                 value: name.as_ref().unwrap_or(orig_name).to_string(),
             });
         }
@@ -157,7 +157,7 @@ pub fn lambda_transformer(
         } = &binding
         {
             rest = Some(ast::Ident {
-                span: r.span(),
+                span: r.source_span(),
                 value: name.as_ref().unwrap_or(orig_name).to_string(),
             });
         }
@@ -179,7 +179,7 @@ pub fn lambda_transformer(
     }
 
     ast::Expr {
-        span: syn.span(),
+        span: syn.source_span(),
         kind: ast::ExprKind::Lambda {
             formals,
             rest,
@@ -204,7 +204,7 @@ fn lambda_formals<'a>(
                     SynExp::List(_) | SynExp::Boolean(_) | SynExp::Char(_) => {
                         expander.emit_error(|b| {
                             b.msg(format!("expected a formal, found `{}`", f.red().green()))
-                                .span(f.span())
+                                .span(f.source_span())
                         });
                     }
                 }
@@ -217,7 +217,7 @@ fn lambda_formals<'a>(
                     SynExp::List(_) | SynExp::Boolean(_) | SynExp::Char(_) => {
                         expander.emit_error(|b| {
                             b.msg(format!("expected a formal, found `{}`", f.red().green()))
-                                .span(f.span())
+                                .span(f.source_span())
                         });
                     }
                 }
@@ -228,14 +228,14 @@ fn lambda_formals<'a>(
         SynExp::Char(c) => {
             expander.emit_error(|b| {
                 b.msg(format!("expected a list or an identifier, found `{c}`"))
-                    .span(c.span())
+                    .span(c.source_span())
             });
             (vec![], None)
         }
         SynExp::Boolean(b) => {
             expander.emit_error(|br| {
                 br.msg(format!("expected a list or an identifier, found `{b}`"))
-                    .span(b.span())
+                    .span(b.source_span())
             });
             (vec![], None)
         }
@@ -247,7 +247,7 @@ pub fn define_transformer(
     syn: SynList,
     env: &Env<String, Binding>,
 ) -> Option<ast::Define> {
-    let span = syn.span();
+    let span = syn.source_span();
     let close_delim_char = syn.expected_close_char();
     let close_delim_span = syn.close_delim_span();
     let (sexps, _) = syn.into_parts();
@@ -258,7 +258,7 @@ pub fn define_transformer(
         Some(SynExp::Symbol(sy)) => {
             // env should already have the binding to the variable
             ast::Ident {
-                span: sy.span(),
+                span: sy.source_span(),
                 value: sy.value().to_string(),
             }
         }
@@ -291,7 +291,7 @@ pub fn quote_transformer(
     syn: SynList,
     _: &Env<String, Binding>,
 ) -> ast::Expr {
-    let span = syn.span();
+    let span = syn.source_span();
     let red = Rc::clone(syn.red());
     let (sexps, _) = syn.into_parts();
     let mut children = sexps.into_iter();
@@ -305,7 +305,7 @@ pub fn quote_transformer(
     if let Some(r) = children.next() {
         expander.emit_error(|b| {
             b.msg(format!("expected close identifier, found {}", r))
-                .span(r.span())
+                .span(r.source_span())
         });
     };
 
@@ -315,7 +315,7 @@ pub fn quote_transformer(
 }
 
 fn quote_expr(syn: SynExp) -> ast::Expr {
-    let span = syn.span();
+    let span = syn.source_span();
     match syn {
         SynExp::List(l) => ast::Expr {
             span,

@@ -2,7 +2,7 @@ use std::{
     collections::{hash_map::Entry, HashMap},
     fmt,
     iter::Peekable,
-    slice::Iter,
+    vec::IntoIter,
 };
 
 use crate::{
@@ -20,10 +20,10 @@ pub fn compile_pattern(syn: &SynExp) -> (Pattern, Vec<Diagnostic>) {
 
 fn do_compile_pattern(syn: SynExp, _diags: &mut Vec<Diagnostic>) -> Pattern {
     match syn {
-        SynExp::List(l) if l.sexps.is_empty() => Pattern::List(vec![], l.span()),
+        SynExp::List(l) if l.sexps.is_empty() => Pattern::List(vec![], l.source_span()),
         SynExp::List(ps) => {
             let mut patterns: Vec<Pattern> = vec![];
-            let span = ps.span();
+            let span = ps.source_span();
             let (sexps, dot) = ps.into_parts();
             for p in sexps {
                 match &p {
@@ -31,7 +31,8 @@ fn do_compile_pattern(syn: SynExp, _diags: &mut Vec<Diagnostic>) -> Pattern {
                     SynExp::Symbol(s) if s.value() == "..." => match patterns.pop() {
                         Some(p) => {
                             let pspan = p.span();
-                            patterns.push(Pattern::Repeat(Box::new(p), pspan.extend(s.span())));
+                            patterns
+                                .push(Pattern::Repeat(Box::new(p), pspan.extend(s.source_span())));
                         }
                         None => todo!(),
                     },
@@ -77,11 +78,11 @@ pub enum PatternConstant {
 impl Pattern {
     pub fn span(&self) -> Span {
         match self {
-            Pattern::Discard(s) => s.span(),
-            Pattern::Variable(v) => v.span(),
+            Pattern::Discard(s) => s.source_span(),
+            Pattern::Variable(v) => v.source_span(),
             Pattern::Constant(c) => match c {
-                PatternConstant::Boolean(b) => b.span(),
-                PatternConstant::Char(c) => c.span(),
+                PatternConstant::Boolean(b) => b.source_span(),
+                PatternConstant::Char(c) => c.source_span(),
             },
             Pattern::List(_, span) | Pattern::Repeat(_, span) => *span,
         }
@@ -97,7 +98,7 @@ impl Pattern {
             match p {
                 Pattern::Variable(var) => match vars.get(var.value()) {
                     Some(_) => {
-                        repeat.push((var.value().to_string(), var.span()));
+                        repeat.push((var.value().to_string(), var.source_span()));
                     }
                     None => {
                         vars.insert(var.value().to_string(), depth);
@@ -120,38 +121,51 @@ impl Pattern {
         (vars, repeat)
     }
 
-    pub fn match_(&self, syn: &SynExp) -> Option<HashMap<String, MatchVariable>> {
+    pub fn list(&self) -> Option<&[Pattern]> {
+        match self {
+            Pattern::List(l, _) => Some(l),
+            _ => None,
+        }
+    }
+
+    pub fn match_(&self, syn: SynExp) -> Result<HashMap<String, MatchVariable>, SynExp> {
         match &self {
             // _ matches everything
-            Pattern::Discard(_) => Some(HashMap::new()),
+            Pattern::Discard(_) => Ok(HashMap::new()),
             // a variable matches everything and stores it in a variable
-            Pattern::Variable(v) => Some(HashMap::from([(
+            Pattern::Variable(v) => Ok(HashMap::from([(
                 v.value().to_string(),
                 MatchVariable::Variable(syn.clone()),
             )])),
             // a constant only matches itself
             Pattern::Constant(c) => match (c, syn) {
                 (PatternConstant::Boolean(bl), SynExp::Boolean(br)) if bl.value() == br.value() => {
-                    Some(HashMap::new())
+                    Ok(HashMap::new())
                 }
                 (PatternConstant::Char(cl), SynExp::Char(cr)) if cl.value() == cr.value() => {
-                    Some(HashMap::new())
+                    Ok(HashMap::new())
                 }
-                _ => None,
+                (_, syn) => Err(syn),
             },
             Pattern::List(pl, _) => match syn {
-                SynExp::List(sl) => Self::match_list(pl, sl),
-                _ => None,
+                SynExp::List(sl) => Self::match_list(pl, sl).map_err(SynExp::List),
+                _ => Err(syn),
             },
             Pattern::Repeat(_, _) => panic!("must be inside a list"),
         }
     }
 
-    fn match_list(pl: &[Pattern], sl: &SynList) -> Option<HashMap<String, MatchVariable>> {
+    pub fn match_list(
+        pl: &[Pattern],
+        sl: SynList,
+    ) -> Result<HashMap<String, MatchVariable>, SynList> {
         let mut vars = HashMap::new();
         let mut pats = pl.iter().peekable();
+        // TODO: Don't clone the whole thing
+        let error = sl.clone();
         // TODO: handle dot
-        let mut syns = sl.sexps().iter().peekable();
+        let (syns, _) = sl.into_parts();
+        let mut syns = syns.into_iter().peekable();
         while let Some(pat) = pats.next() {
             if let Pattern::Repeat(pat, _) = pat {
                 let p = pats.peek();
@@ -164,30 +178,30 @@ impl Pattern {
                     Some(v) => {
                         vars.extend(v);
                     }
-                    None => return None,
+                    None => return Err(error),
                 }
             } else {
                 match syns.next() {
                     Some(syn) => match pat.match_(syn) {
-                        Some(v) => vars.extend(v),
-                        None => return None,
+                        Ok(v) => vars.extend(v),
+                        _ => return Err(error),
                     },
                     // reached the end of input
-                    None => return None,
+                    None => return Err(error),
                 }
             }
         }
 
         if syns.next().is_none() {
-            Some(vars)
+            Ok(vars)
         } else {
-            None
+            Err(error)
         }
     }
 
     fn match_repeat(
         &self,
-        syns: &mut Peekable<Iter<SynExp>>,
+        syns: &mut Peekable<IntoIter<SynExp>>,
         stop: impl Fn(&SynExp) -> bool,
     ) -> Option<HashMap<String, MatchVariable>> {
         if let Some(syn) = syns.peek() {
@@ -229,25 +243,26 @@ impl Pattern {
                 loop {
                     match syns.peek() {
                         Some(s) if stop(s) => break,
-                        Some(SynExp::List(sl)) => match Self::match_list(pl, sl) {
-                            Some(res) => {
-                                syns.next();
-                                for (rk, rv) in res {
-                                    match vars.entry(rk) {
-                                        Entry::Occupied(mut o) => match o.get_mut() {
-                                            MatchVariable::Variable(v) => {
-                                                panic!("expected a list {v:?}")
-                                            }
-                                            MatchVariable::List(l) => l.push(rv),
-                                        },
-                                        Entry::Vacant(v) => {
-                                            v.insert(MatchVariable::List(vec![rv]));
+                        Some(SynExp::List(sl)) => {
+                            let Ok(res) = Self::match_list(pl, sl.clone()) else {
+                                break;
+                            };
+
+                            syns.next();
+                            for (rk, rv) in res {
+                                match vars.entry(rk) {
+                                    Entry::Occupied(mut o) => match o.get_mut() {
+                                        MatchVariable::Variable(v) => {
+                                            panic!("expected a list {v:?}")
                                         }
+                                        MatchVariable::List(l) => l.push(rv),
+                                    },
+                                    Entry::Vacant(v) => {
+                                        v.insert(MatchVariable::List(vec![rv]));
                                     }
                                 }
                             }
-                            None => break,
-                        },
+                        }
                         _ => break,
                     }
                 }
@@ -265,14 +280,14 @@ pub enum MatchVariable {
 }
 
 impl MatchVariable {
-    fn variable(&self) -> Option<&SynExp> {
+    pub fn variable(&self) -> Option<&SynExp> {
         match self {
             MatchVariable::Variable(v) => Some(v),
             MatchVariable::List(_) => None,
         }
     }
 
-    fn list(&self) -> Option<&[MatchVariable]> {
+    pub fn list(&self) -> Option<&[MatchVariable]> {
         match self {
             MatchVariable::Variable(_) => None,
             MatchVariable::List(l) => Some(l.as_ref()),
@@ -287,17 +302,17 @@ impl fmt::Debug for Pattern {
             let padding = " ".repeat(width);
             match self {
                 Pattern::Discard(s) => {
-                    write!(f, "{padding}_@{}", s.span())
+                    write!(f, "{padding}_@{}", s.source_span())
                 }
                 Pattern::Variable(v) => {
-                    write!(f, "{padding}{}@{}", v, v.span())
+                    write!(f, "{padding}{}@{}", v, v.source_span())
                 }
                 Pattern::Constant(c) => match c {
                     PatternConstant::Boolean(b) => {
-                        write!(f, "{padding}{}@{}", b, b.span())
+                        write!(f, "{padding}{}@{}", b, b.source_span())
                     }
                     PatternConstant::Char(c) => {
-                        write!(f, "{padding}{}@{}", c, c.span())
+                        write!(f, "{padding}{}@{}", c, c.source_span())
                     }
                 },
                 Pattern::List(c, span) => write!(
@@ -521,7 +536,7 @@ mod tests {
             let mut children = red.syn_children();
             let syn = children.next().expect("expected an item");
             assert!(pred(
-                pattern.match_(&syn).expect("should have matched input")
+                pattern.match_(syn).expect("should have matched input")
             ));
         }
 
