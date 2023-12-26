@@ -224,7 +224,7 @@ impl Template {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TemplateKind {
     /// `#t` `#\a`
     Constant(SynExp),
@@ -245,7 +245,7 @@ impl Template {
         source_red: Rc<RedTree>,
         file_id: FileId,
     ) -> SynExp {
-        self.do_instantiate(vars, source_red, file_id, &[])
+        self.do_instantiate(vars, source_red, file_id, &[]).unwrap()
     }
 
     fn do_instantiate(
@@ -254,19 +254,15 @@ impl Template {
         source_red: Rc<RedTree>,
         file_id: FileId,
         repeat: &[usize],
-    ) -> SynExp {
+    ) -> Option<SynExp> {
         match &self.kind {
-            TemplateKind::Constant(c) => c.clone().with_source_span(Span::new(
+            TemplateKind::Constant(c) => Some(c.clone().with_source_span(Span::new(
                 file_id,
                 source_red.offset().try_into().unwrap(),
                 source_red.text_length().try_into().unwrap(),
-            )),
-            TemplateKind::Variable(v, _) => vars
-                .get(v)
-                .and_then(MatchVariable::variable)
-                .cloned()
-                .unwrap_or_else(|| panic!("expected a simple variable {v}")),
-            TemplateKind::Binding(b, _) => SynExp::Symbol(SynSymbol::raw(
+            ))),
+            TemplateKind::Variable(v, _) => get_variable(vars, v, repeat),
+            TemplateKind::Binding(b, _) => Some(SynExp::Symbol(SynSymbol::raw(
                 &self.red,
                 b.scopes().clone(),
                 self.file_id,
@@ -275,7 +271,7 @@ impl Template {
                     source_red.offset().try_into().unwrap(),
                     source_red.text_length().try_into().unwrap(),
                 )),
-            )),
+            ))),
             TemplateKind::List(l, _) => {
                 let mut sink = Vec::new();
                 for t in l {
@@ -285,10 +281,10 @@ impl Template {
                         file_id,
                         &mut sink,
                         repeat,
-                    );
+                    )?;
                 }
 
-                SynExp::List(SynList::raw(
+                Some(SynExp::List(SynList::raw(
                     &self.red,
                     sink,
                     None,
@@ -298,7 +294,7 @@ impl Template {
                         source_red.offset().try_into().unwrap(),
                         source_red.text_length().try_into().unwrap(),
                     )),
-                ))
+                )))
             }
             TemplateKind::Splice(_, _) => panic!("should be inside a list"),
             TemplateKind::Error(_, _) => todo!(),
@@ -312,13 +308,14 @@ impl Template {
         file_id: FileId,
         sink: &mut Vec<SynExp>,
         repeat: &[usize],
-    ) {
+    ) -> Option<()> {
         match &self.kind {
             TemplateKind::Constant(_)
             | TemplateKind::Variable(_, _)
             | TemplateKind::Binding(_, _)
             | TemplateKind::List(_, _) => {
-                sink.push(self.do_instantiate(vars, source_red, file_id, repeat));
+                sink.push(self.do_instantiate(vars, source_red, file_id, repeat)?);
+                Some(())
             }
             TemplateKind::Splice(s, _) => {
                 // TODO: emit diagnostics when variable repeat don't match
@@ -327,23 +324,63 @@ impl Template {
                         .get(e)
                         .unwrap_or_else(|| panic!("expected variable {e}"))
                     {
+                        // reach into the repeat iteration
                         MatchVariable::Variable(_) => panic!("expected a repeat variable {e}"),
                         MatchVariable::List(l) => {
                             for e in l {
                                 sink.push(e.variable().cloned().expect("a variable"));
                             }
+                            Some(())
                         }
                     },
-                    TemplateKind::List(_, _) => todo!(),
+                    TemplateKind::List(_, _) => {
+                        let mut repeat = repeat.to_owned();
+                        repeat.push(0);
+                        loop {
+                            match s.do_instantiate(vars, Rc::clone(&source_red), file_id, &repeat) {
+                                Some(s) => sink.push(s),
+                                None => break,
+                            }
+                            *repeat.last_mut().unwrap() += 1;
+                        }
+                        if repeat.last().copied().unwrap_or_default() > 0 {
+                            Some(())
+                        } else {
+                            None
+                        }
+                    }
                     TemplateKind::Splice(_, _) => todo!(),
                     TemplateKind::Error(e, _) => {
                         sink.push(e.clone());
+                        Some(())
                     }
                     _ => panic!("invalid splice argument"),
                 }
             }
             TemplateKind::Error(_, _) => todo!(),
         }
+    }
+}
+
+fn get_variable(
+    vars: &HashMap<String, MatchVariable>,
+    v: &str,
+    repeat: &[usize],
+) -> Option<SynExp> {
+    match vars.get(v).expect("unbound variable") {
+        MatchVariable::Variable(v) => Some(v.clone()),
+        MatchVariable::List(l) => resolve_repeat_variable(l, v, repeat),
+    }
+}
+
+fn resolve_repeat_variable(var: &[MatchVariable], v: &str, repeat: &[usize]) -> Option<SynExp> {
+    if repeat.is_empty() {
+        panic!("variable {v} not repeating anymore at this level");
+    }
+
+    match &var.get(repeat[0])? {
+        MatchVariable::Variable(v) => Some(v.clone()),
+        MatchVariable::List(l) => resolve_repeat_variable(l, v, &repeat[1..]),
     }
 }
 
@@ -490,11 +527,38 @@ mod tests {
     }
 
     #[test]
-    fn splice() {
+    fn splice_variable() {
         check(
             "(syntax-rules () [(_ e ...) (e ...)])",
             r"(splice #t #\a #f #\b)",
             expect![r"(#t #\a #f #\b)"],
+        );
+    }
+
+    #[test]
+    fn splice_list() {
+        check(
+            "(syntax-rules () [(_ (e) ...) ((e) ...)])",
+            r"(splice (#t) (#f))",
+            expect![r"((#t) (#f))"],
+        );
+    }
+
+    #[test]
+    fn splice_nested_list() {
+        check(
+            "(syntax-rules () [(_ ((e) ...) ...) (((e) ...) ...)])",
+            r"(splice ((#t) (#f)) ((#\a)))",
+            expect![r"(((#t) (#f)) ((#\a)))"],
+        );
+    }
+
+    #[test]
+    fn let_macro() {
+        check(
+            "(syntax-rules () [(_ ((v e) ...) body0 body ...) ((lambda (v ...) body0 body ...) e ...)])",
+            r"(let ([x #\a] [y #\b]) x y)",
+            expect![[r#"((lambda (x y) x y) #\a #\b)"#]],
         );
     }
 }

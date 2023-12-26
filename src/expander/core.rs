@@ -102,7 +102,7 @@ pub fn lambda_transformer(
     env: &Env<String, Binding>,
 ) -> ast::Expr {
     let lambda_scope = Scope::new();
-    let close_delim_char = dbg!(&syn).expected_close_char();
+    let close_delim_char = &syn.expected_close_char();
     let close_delim_span = syn.close_delim_span();
     let mut lambda_env = env.enter();
     let mut children = syn.sexps().iter();
