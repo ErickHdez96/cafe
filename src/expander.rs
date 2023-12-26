@@ -24,6 +24,7 @@ pub mod macros;
 pub mod scopes;
 
 type CoreDefTransformer = fn(&mut Expander, SynList, &Env<String, Binding>) -> Option<ast::Define>;
+type CoreMacroDefTransformer = fn(&mut Expander, SynList, &mut Env<String, Binding>);
 type CoreExprTransformer = fn(&mut Expander, SynList, &Env<String, Binding>) -> ast::Expr;
 type SyntaxTransformer = fn(SynList) -> Result<SynExp, Vec<Diagnostic>>;
 
@@ -41,6 +42,14 @@ pub fn core_expander_interface() -> ModuleInterface {
             scopes: Scopes::core(),
             name: String::from("define"),
             transformer: core::define_transformer,
+        },
+    );
+    core.insert(
+        String::from("define-syntax"),
+        Binding::CoreMacroDefTransformer {
+            scopes: Scopes::core(),
+            name: String::from("define-syntax"),
+            transformer: core::define_syntax_transformer,
         },
     );
     core.insert(
@@ -117,6 +126,11 @@ pub enum Binding {
         name: String,
         transformer: CoreDefTransformer,
     },
+    CoreMacroDefTransformer {
+        scopes: Scopes,
+        name: String,
+        transformer: CoreMacroDefTransformer,
+    },
     CoreExprTransformer {
         scopes: Scopes,
         name: String,
@@ -160,6 +174,7 @@ impl Binding {
                 name, orig_name, ..
             } => name.as_ref().unwrap_or(orig_name),
             Binding::CoreDefTransformer { name, .. }
+            | Binding::CoreMacroDefTransformer { name, .. }
             | Binding::CoreExprTransformer { name, .. }
             | Binding::SyntaxTransformer { name, .. }
             | Binding::NativeSyntaxTransformer { name, .. } => name,
@@ -172,6 +187,7 @@ impl Binding {
             | Binding::Import { scopes }
             | Binding::Module { scopes }
             | Binding::CoreDefTransformer { scopes, .. }
+            | Binding::CoreMacroDefTransformer { scopes, .. }
             | Binding::CoreExprTransformer { scopes, .. }
             | Binding::SyntaxTransformer { scopes, .. }
             | Binding::NativeSyntaxTransformer { scopes, .. } => scopes,
@@ -184,6 +200,7 @@ impl Binding {
             | Binding::Import { ref mut scopes }
             | Binding::Module { ref mut scopes }
             | Binding::CoreDefTransformer { ref mut scopes, .. }
+            | Binding::CoreMacroDefTransformer { ref mut scopes, .. }
             | Binding::CoreExprTransformer { ref mut scopes, .. }
             | Binding::SyntaxTransformer { ref mut scopes, .. }
             | Binding::NativeSyntaxTransformer { ref mut scopes, .. } => scopes,
@@ -294,42 +311,46 @@ impl Expander<'_> {
     }
 
     fn expand_macro(&mut self, syn: SynExp, env: &mut Env<String, Binding>) -> Option<SynExp> {
-        if let SynExp::List(l) = syn {
-            if let Some(SynExp::Symbol(s)) = l.sexps().first() {
-                match resolve(s, env) {
-                    Some(Binding::NativeSyntaxTransformer { transformer, .. }) => {
-                        let s = transformer.expand(self, l, env)?;
-                        return self.expand_macro(s, env);
-                    }
-                    Some(Binding::Import { .. }) => {
-                        import(self, l, env);
-                        return None;
-                    }
-                    Some(Binding::Module { .. }) => {
-                        module(self, l);
-                        return None;
-                    }
-                    Some(Binding::CoreDefTransformer { scopes, .. }) => {
-                        let mut sexps = l.sexps().iter();
-                        if let Some(s) = sexps.nth(1).and_then(SynExp::symbol) {
-                            env.insert(
-                                s.value().to_string(),
-                                Binding::Value {
-                                    scopes: scopes.clone(),
-                                    orig_module: self.current_module().clone(),
-                                    orig_name: s.value().to_string(),
-                                    name: Some(s.value().to_string()),
-                                },
-                            );
-                        }
-                    }
-                    _ => {}
+        let SynExp::List(l) = syn else {
+            return Some(syn);
+        };
+
+        if let Some(SynExp::Symbol(s)) = l.sexps().first() {
+            match resolve(s, env) {
+                Some(Binding::NativeSyntaxTransformer { transformer, .. }) => {
+                    let s = transformer.expand(self, l, env)?;
+                    return self.expand_macro(s, env);
                 }
+                Some(Binding::Import { .. }) => {
+                    import(self, l, env);
+                    return None;
+                }
+                Some(Binding::Module { .. }) => {
+                    module(self, l);
+                    return None;
+                }
+                Some(Binding::CoreDefTransformer { scopes, .. }) => {
+                    let mut sexps = l.sexps().iter();
+                    if let Some(s) = sexps.nth(1).and_then(SynExp::symbol) {
+                        env.insert(
+                            s.value().to_string(),
+                            Binding::Value {
+                                scopes: scopes.clone(),
+                                orig_module: self.current_module().clone(),
+                                orig_name: s.value().to_string(),
+                                name: Some(s.value().to_string()),
+                            },
+                        );
+                    }
+                }
+                Some(Binding::CoreMacroDefTransformer { transformer, .. }) => {
+                    transformer(self, l, env);
+                    return None;
+                }
+                _ => {}
             }
-            Some(SynExp::List(l))
-        } else {
-            Some(syn)
         }
+        Some(SynExp::List(l))
     }
 
     fn expand_item(&mut self, syn: SynExp, env: &Env<String, Binding>) -> Option<ast::Item> {
@@ -865,6 +886,14 @@ mod tests {
             },
         );
         core.insert(
+            String::from("define-syntax"),
+            Binding::CoreMacroDefTransformer {
+                scopes: Scopes::core(),
+                name: String::from("define-syntax"),
+                transformer: core::define_syntax_transformer,
+            },
+        );
+        core.insert(
             String::from("lambda"),
             Binding::CoreExprTransformer {
                 scopes: Scopes::core(),
@@ -1362,6 +1391,45 @@ mod tests {
                       {list 0:96..7
                         {var |id| (#script ()) 0:97..2}
                         {#t 0:100..2}}
+                "#]],
+            );
+        }
+
+        #[test]
+        fn define_and_use_macro() {
+            check(
+                r"(import (rnrs expander core ()))
+                  (define-syntax id (syntax-rules () [(_ e) e]))
+                  (id #t)",
+                expect![[r#"
+                    mod (#script ()) @0:0..123
+                      {#t 0:120..2}
+                "#]],
+            );
+        }
+
+        #[test]
+        fn define_let() {
+            check(
+                r"(import (rnrs expander core ()))
+                  (define-syntax let
+                    (syntax-rules () [(_ ((v e) ...) body0 body ...) ((lambda (v ...) body0 body ...) e ...)]))
+                  (let ([x #t]
+                        [y #\a])
+                    (if x (quote y)))",
+                expect![[r#"
+                    mod (#script ()) @0:0..283
+                      {list 0:200..83
+                        {λ 0:200..83
+                          ({|x 1| 0:207..1} {|y 2| 0:238..1})
+                          #f
+                          {if 0:266..16
+                            {var |x 1| (#script ()) 0:270..1}
+                            {quote 0:272..9
+                              {var |y| (()) 0:279..1}}
+                            {void 0:266..16}}}
+                        {#t 0:209..2}
+                        {#\a 0:240..3}}
                 "#]],
             );
         }

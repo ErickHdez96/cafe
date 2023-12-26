@@ -3,7 +3,7 @@ use std::{fmt, rc::Rc};
 use crate::{
     diagnostics::Diagnostic,
     env::Env,
-    syntax::cst::{SynExp, SynList},
+    syntax::cst::{SynExp, SynList, SynSymbol},
 };
 
 use self::{
@@ -17,6 +17,37 @@ pub mod patterns;
 pub mod templates;
 
 const INDENTATION_WIDTH: usize = 2;
+
+pub fn compile_transformer(
+    syn: &SynExp,
+    env: &Env<String, Binding>,
+) -> (NativeSyntaxTransformer, Vec<Diagnostic>) {
+    match syn.list() {
+        // TODO: Use syntax-rules from the environment
+        Some(l)
+            if l.sexps()
+                .first()
+                .and_then(SynExp::symbol)
+                .map(SynSymbol::value)
+                == Some("syntax-rules") =>
+        {
+            compile_syntax_rules(l, env)
+        }
+        s => {
+            let mut db = Diagnostic::builder().msg("expected a transformer");
+            if let Some(s) = s {
+                db = db.span(s.source_span());
+            }
+            (
+                NativeSyntaxTransformer {
+                    // TODO: return an ID transformer (syntax-rules () [(_ e) e])
+                    rules: vec![],
+                },
+                vec![db.finish()],
+            )
+        }
+    }
+}
 
 pub fn compile_syntax_rules(
     syn: &SynList,

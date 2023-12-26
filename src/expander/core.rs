@@ -9,7 +9,7 @@ use crate::{
     },
 };
 
-use super::{scopes::Scope, Binding, Expander};
+use super::{macros::compile_transformer, scopes::Scope, Binding, Expander};
 
 pub fn if_transformer(
     expander: &mut Expander,
@@ -284,6 +284,56 @@ pub fn define_transformer(
     }
 
     Some(ast::Define { span, name, expr })
+}
+
+pub fn define_syntax_transformer(
+    expander: &mut Expander,
+    syn: SynList,
+    env: &mut Env<String, Binding>,
+) {
+    let close_delim_char = syn.expected_close_char();
+    let close_delim_span = syn.close_delim_span();
+    let (sexps, _) = syn.into_parts();
+    let mut children = sexps.into_iter();
+    children.next();
+
+    let (name, scopes) = match children.next() {
+        Some(SynExp::Symbol(sy)) => (sy.value().to_string(), sy.scopes().clone()),
+        _ => {
+            expander.emit_error(|b| {
+                b.msg(format!("expected an identifier, found {close_delim_char}",))
+                    .span(close_delim_span)
+            });
+            return;
+        }
+    };
+
+    let (transformer, diags) = match children.next() {
+        Some(e) => compile_transformer(&e, env),
+        None => {
+            expander.emit_error(|b| {
+                b.msg(format!("expected a transformer, found {close_delim_char}"))
+                    .span(close_delim_span)
+            });
+            return;
+        }
+    };
+    expander.diagnostics.extend(diags);
+    env.insert(
+        name.clone(),
+        Binding::NativeSyntaxTransformer {
+            scopes,
+            name,
+            transformer: transformer.into(),
+        },
+    );
+
+    if let Some(c) = children.next() {
+        expander.emit_error(|b| {
+            b.msg(format!("expected {}, found {}", close_delim_char, c))
+                .span(close_delim_span)
+        });
+    }
 }
 
 pub fn quote_transformer(
