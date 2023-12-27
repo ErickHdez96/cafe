@@ -492,6 +492,19 @@ impl Expander<'_> {
                             }
                         }
                     }
+                    Some(Binding::NativeSyntaxTransformer { transformer, .. }) => {
+                        let macro_scope = Scope::new();
+                        match transformer.expand(self, syn.with_scope(macro_scope), env) {
+                            Some(mut e) => {
+                                e.flip_scope(macro_scope);
+                                self.expand_expr(e, env)
+                            }
+                            None => ast::Expr {
+                                span: syn.source_span(),
+                                kind: ast::ExprKind::List(vec![]),
+                            },
+                        }
+                    }
                     r => todo!("{r:?}"),
                 },
                 SynExp::Boolean(_) | SynExp::Char(_) => {
