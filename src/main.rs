@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+mod repl;
 
 use cafe::{
     config::CompilerConfig,
@@ -19,6 +20,10 @@ Options:
 fn main() {
     let qctx = BuildSystem::default();
     let (config, input) = parse_args();
+    let Some(input) = input else {
+        repl::repl();
+    };
+
     qctx.feed_compiler_config(config);
     qctx.feed_module_name((ModuleName::script(), input));
     qctx.feed_intrinsic_lib(core_expander_interface());
@@ -34,7 +39,7 @@ fn main() {
     }
 }
 
-fn parse_args() -> (CompilerConfig, PathBuf) {
+fn parse_args() -> (CompilerConfig, Option<PathBuf>) {
     let mut input = None;
     let mut config = CompilerConfig::default();
 
@@ -62,10 +67,7 @@ fn parse_args() -> (CompilerConfig, PathBuf) {
         }
     }
 
-    (
-        config,
-        input.unwrap_or_else(|| bail(HELP_MESSAGE, 1)).into(),
-    )
+    (config, input.map(|i| i.into()))
 }
 
 fn bail(msg: &str, exit_code: i32) -> ! {

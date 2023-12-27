@@ -43,7 +43,27 @@ pub fn register_module_name((name, path): (ModuleName, PathBuf)) {
     REGISTERED_MODULE_NAMES.with(|m| m.borrow_mut().insert(name, path));
 }
 
+pub fn register_source_file(source_file: SourceFile) {
+    PATH_MAPPING.with(|map| {
+        map.borrow_mut()
+            .insert(source_file.path.clone(), source_file.id)
+    });
+    FILE_MAPPING.with(|map| {
+        map.borrow_mut()
+            .insert(source_file.id, Rc::new(source_file))
+    });
+}
+
 pub fn read_file_provider(_: &QCtx, path: PathBuf) -> Res<Rc<SourceFile>> {
+    let id = PATH_MAPPING.with(|map| map.borrow().get(&path).cloned());
+
+    if let Some(id) = id {
+        let file = FILE_MAPPING.with(|map| map.borrow().get(&id).cloned());
+        if let Some(file) = file {
+            return Ok(file);
+        }
+    }
+
     match std::fs::read_to_string(&path) {
         Ok(contents) => {
             let file = Rc::new(SourceFile::new(path, contents));
@@ -112,8 +132,10 @@ pub fn expand_provider(qctx: &QCtx, module_name: ModuleName) -> Res<ExpanderResu
     Ok(expander_res)
 }
 
+// TODO: Simplify the inputs
 thread_local! {
     static FILE_MAPPING: RefCell<HashMap<FileId, Rc<SourceFile>>> = RefCell::default();
+    static PATH_MAPPING: RefCell<HashMap<PathBuf, FileId>> = RefCell::default();
     static COMPILER_CONFIG: RefCell<Rc<CompilerConfig>> = RefCell::default();
     static ROOT_BINDING_ENV: RefCell<Rc<Env<'static, String, Binding>>> = RefCell::default();
     static INTRINSIC_LIBRARIES: RefCell<HashMap<ModuleName, Rc<ModuleInterface>>> = RefCell::default();

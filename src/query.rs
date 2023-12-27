@@ -190,6 +190,11 @@ build_system! {
             ty: (ModuleName, PathBuf),
         },
         {
+            name: feed_source_file,
+            setter: providers::register_source_file,
+            ty: SourceFile,
+        },
+        {
             name: feed_compiler_config,
             setter: providers::set_compiler_config,
             ty: CompilerConfig,
