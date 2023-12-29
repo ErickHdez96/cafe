@@ -1,4 +1,9 @@
-use std::{cell::RefCell, collections::HashMap, path::PathBuf, rc::Rc};
+use std::{
+    cell::RefCell,
+    collections::{hash_map::Entry, HashMap},
+    path::PathBuf,
+    rc::Rc,
+};
 
 use crate::{
     config::CompilerConfig,
@@ -7,7 +12,7 @@ use crate::{
     expander::{expand_root, Binding, ExpanderResult},
     file::{FileId, SourceFile},
     syntax::{
-        ast::{Module, ModuleInterface, ModuleName},
+        ast::{ModId, Module, ModuleInterface, ModuleName},
         cst::SynRoot,
         parser::{parse_source_file, ParseResult},
     },
@@ -132,10 +137,37 @@ pub fn expand_provider(qctx: &QCtx, module_name: ModuleName) -> Res<ExpanderResu
     Ok(expander_res)
 }
 
+// could they be moved to a different place?
+pub fn module_id_provider(_qctx: &QCtx, module_name: ModuleName) -> ModId {
+    MOD_NAME_ID_MAPPING.with(|m| match m.borrow_mut().entry(module_name.clone()) {
+        Entry::Occupied(o) => *o.get(),
+        Entry::Vacant(v) => {
+            let id = ModId::new();
+            v.insert(id);
+            MOD_ID_NAME_MAPPING.with(|m| {
+                m.borrow_mut().insert(id, module_name);
+            });
+            id
+        }
+    })
+}
+
+pub fn resolve_module_id_provider(_qctx: &QCtx, mod_id: ModId) -> ModuleName {
+    MOD_ID_NAME_MAPPING.with(|m| {
+        m.borrow()
+            .get(&mod_id)
+            .cloned()
+            .unwrap_or_else(|| panic!("module id {mod_id:?} not registered"))
+    })
+}
+
 // TODO: Simplify the inputs
 thread_local! {
     static FILE_MAPPING: RefCell<HashMap<FileId, Rc<SourceFile>>> = RefCell::default();
     static PATH_MAPPING: RefCell<HashMap<PathBuf, FileId>> = RefCell::default();
+    static MOD_NAME_ID_MAPPING: RefCell<HashMap<ModuleName, ModId>> = RefCell::default();
+    static MOD_ID_NAME_MAPPING: RefCell<HashMap<ModId, ModuleName>> = RefCell::default();
+
     static COMPILER_CONFIG: RefCell<Rc<CompilerConfig>> = RefCell::default();
     static ROOT_BINDING_ENV: RefCell<Rc<Env<'static, String, Binding>>> = RefCell::default();
     static INTRINSIC_LIBRARIES: RefCell<HashMap<ModuleName, Rc<ModuleInterface>>> = RefCell::default();

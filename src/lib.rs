@@ -8,5 +8,7 @@ pub mod file;
 pub mod query;
 pub mod span;
 pub mod syntax;
+pub mod ty;
+mod utils;
 
 pub use query::BuildSystem;

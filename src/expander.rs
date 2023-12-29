@@ -107,40 +107,53 @@ impl fmt::Debug for Expander<'_> {
     }
 }
 
+/// The possible values a name may be bound to at compile time.
+///
+/// Every Binding has a set of scopes in which it is visible (for macro expansion).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Binding {
+    /// A normal runtime value. The value isn't stored here, but is generated at runtime.
     Value {
         scopes: Scopes,
+        /// The [`Module`] where it comes from. Macros uses may introduce bindings from other
+        /// modules without needing to import them.
         orig_module: ModuleName,
+        /// The name as given in the lexical source. For debug and diagnostics.
         orig_name: String,
+        /// Name used to identify ambigous identifiers after macro expansion. For debug and
+        /// diagnostics.
         name: Option<String>,
     },
-    Import {
-        scopes: Scopes,
-    },
-    Module {
-        scopes: Scopes,
-    },
+    /// Built-in importer binding.
+    Import { scopes: Scopes },
+    /// Built-in module defintion binding.
+    Module { scopes: Scopes },
+    /// Built-in `define` binding.
     CoreDefTransformer {
         scopes: Scopes,
         name: String,
         transformer: CoreDefTransformer,
     },
+    /// Built-in `define-syntax` binding.
     CoreMacroDefTransformer {
         scopes: Scopes,
         name: String,
         transformer: CoreMacroDefTransformer,
     },
+    /// Built-in macro-like expression bindings (e.g. if, lambda, quote, set!).
     CoreExprTransformer {
         scopes: Scopes,
         name: String,
         transformer: CoreExprTransformer,
     },
+    /// An expression was compiled at compile-time into a transformer (e.g. lambda).
     SyntaxTransformer {
         scopes: Scopes,
         name: String,
         transformer: SyntaxTransformer,
     },
+    /// Temporary transformer returned from syntax-rules. It should be moved to a normal
+    /// `SyntaxTransformer.
     NativeSyntaxTransformer {
         scopes: Scopes,
         name: String,
@@ -149,6 +162,7 @@ pub enum Binding {
 }
 
 impl Binding {
+    /// Returns a new [`Binding::Value`] [`Binding`].
     pub fn new_var(name: &str, orig_module: ModuleName, scopes: Scopes) -> Self {
         Self::Value {
             scopes,
@@ -158,7 +172,7 @@ impl Binding {
         }
     }
 
-    pub fn new_id() -> u64 {
+    fn new_id() -> u64 {
         IDENTIFIER_ID.with(|id| {
             let old = id.get();
             id.set(old.saturating_add(1));
@@ -166,6 +180,8 @@ impl Binding {
         })
     }
 
+    /// Returns the original name associated with the [`Binding`]. For debug and diagnostic
+    /// purposes.
     pub fn name(&self) -> &str {
         match self {
             Binding::Import { .. } => "import",
@@ -208,11 +224,6 @@ impl Binding {
     }
 }
 
-enum ItemSyn {
-    Expr(ast::Expr),
-    Syn(SynExp),
-}
-
 pub fn expand_root(
     syn: SynRoot,
     base_env: &Env<'_, String, Binding>,
@@ -240,9 +251,19 @@ pub fn expand_root(
         Module {
             span: Span::dummy(),
             name,
-            items: vec![],
+            //items: vec![],
             exports: intrinsics_env(),
             bindings: Env::default(),
+            body: ast::Expr {
+                span: Span::dummy(),
+                kind: ast::ExprKind::LetRec {
+                    defs: vec![],
+                    exprs: vec![ast::Expr {
+                        span: Span::dummy(),
+                        kind: ast::ExprKind::Void,
+                    }],
+                },
+            },
         },
     );
 
@@ -302,9 +323,10 @@ impl Expander<'_> {
             module: Module {
                 span: syn.span(),
                 name: ModuleName::script(),
-                items,
+                //items,
                 exports: Env::default(),
                 bindings: Env::with_bindings(bindings.into_bindings()),
+                body: items_to_letrec(items, syn.span()),
             },
             diagnostics: std::mem::take(&mut self.diagnostics),
         }
@@ -353,7 +375,7 @@ impl Expander<'_> {
         Some(SynExp::List(l))
     }
 
-    fn expand_item(&mut self, syn: SynExp, env: &Env<String, Binding>) -> Option<ast::Item> {
+    fn expand_item(&mut self, syn: SynExp, env: &Env<String, Binding>) -> Option<Item> {
         match syn {
             SynExp::List(l) => match l.sexps().iter().next() {
                 Some(SynExp::Symbol(s)) => match resolve(s, env) {
@@ -361,14 +383,14 @@ impl Expander<'_> {
                         panic!("import should have been removed in expand_macro")
                     }
                     Some(Binding::CoreDefTransformer { transformer, .. }) => {
-                        transformer(self, l, env).map(ast::Item::Define)
+                        transformer(self, l, env).map(Item::Define)
                     }
-                    _ => Some(ast::Item::Expr(self.expand_expr(SynExp::List(l), env))),
+                    _ => Some(Item::Expr(self.expand_expr(SynExp::List(l), env))),
                 },
-                _ => Some(ast::Item::Expr(self.expand_expr(SynExp::List(l), env))),
+                _ => Some(Item::Expr(self.expand_expr(SynExp::List(l), env))),
             },
             SynExp::Symbol(_) | SynExp::Boolean(_) | SynExp::Char(_) => {
-                Some(ast::Item::Expr(self.expand_expr(syn, env)))
+                Some(Item::Expr(self.expand_expr(syn, env)))
             }
         }
     }
@@ -592,6 +614,77 @@ fn resolve<'env>(var: &SynSymbol, env: &'env Env<String, Binding>) -> Option<&'e
             }
         })
         .0
+}
+
+enum ItemSyn {
+    Expr(ast::Expr),
+    Syn(SynExp),
+}
+
+#[derive(Debug)]
+enum Item {
+    Define(ast::Define),
+    Expr(ast::Expr),
+}
+
+fn items_to_letrec(mut items: Vec<Item>, span: Span) -> ast::Expr {
+    let mut defs = vec![];
+    let mut exprs = vec![];
+    let last_def = items
+        .iter()
+        .rposition(|i| matches!(i, Item::Define(_)))
+        .map(|p| p + 1)
+        .unwrap_or_default();
+    let expr_items = items.split_off(last_def);
+
+    for item in items {
+        match item {
+            Item::Define(d) => {
+                defs.push(d);
+            }
+            Item::Expr(e) => {
+                let span = e.span;
+                defs.push(ast::Define {
+                    span,
+                    name: ast::Ident {
+                        span,
+                        value: format!("#generated {}", Binding::new_id()),
+                    },
+                    expr: Some(ast::Expr {
+                        span,
+                        kind: ast::ExprKind::Begin(vec![
+                            e,
+                            ast::Expr {
+                                span,
+                                kind: ast::ExprKind::Void,
+                            },
+                        ]),
+                    }),
+                });
+            }
+        }
+    }
+
+    for item in expr_items {
+        match item {
+            Item::Define(d) => unreachable!("should have split off the slice here: {d:?}"),
+            Item::Expr(e) => {
+                exprs.push(e);
+            }
+        }
+    }
+
+    if exprs.is_empty() {
+        exprs.push(ast::Expr {
+            span,
+            kind: ast::ExprKind::Void,
+        });
+    }
+
+    ast::Expr {
+        span,
+        kind: ast::ExprKind::LetRec { defs, exprs },
+    }
 }
 
 fn green_list(children: Vec<Rc<GreenTree>>) -> Rc<GreenTree> {
@@ -863,9 +956,19 @@ mod tests {
                     Module {
                         span: Span::dummy(),
                         name: core_name,
-                        items: vec![],
+                        //items: vec![],
                         exports: core_env(),
                         bindings: Env::default(),
+                        body: ast::Expr {
+                            span: Span::dummy(),
+                            kind: ast::ExprKind::LetRec {
+                                defs: vec![],
+                                exprs: vec![ast::Expr {
+                                    span: Span::dummy(),
+                                    kind: ast::ExprKind::Void,
+                                }],
+                            },
+                        },
                     },
                 )])),
             }
@@ -1395,15 +1498,16 @@ mod tests {
                   (id #t)",
                 expect![[r#"
                     mod (#script ()) @0:0..103
-                      {define@0:51..26
-                        {|id| 0:59..2}
-                        {λ 0:62..14
-                          ({|x 1| 0:71..1})
-                          #f
-                          {var |x 1| (#script ()) 0:74..1}}}
-                      {list 0:96..7
-                        {var |id| (#script ()) 0:97..2}
-                        {#t 0:100..2}}
+                      {letrec 0:0..103
+                        {define@0:51..26
+                          {|id| 0:59..2}
+                          {λ 0:62..14
+                            ({|x 1| 0:71..1})
+                            #f
+                            {var |x 1| (#script ()) 0:74..1}}}
+                        {list 0:96..7
+                          {var |id| (#script ()) 0:97..2}
+                          {#t 0:100..2}}}
                 "#]],
             );
         }
@@ -1416,7 +1520,9 @@ mod tests {
                   (id #t)",
                 expect![[r#"
                     mod (#script ()) @0:0..123
-                      {#t 0:120..2}
+                      {letrec 0:0..123
+                        ()
+                        {#t 0:120..2}}
                 "#]],
             );
         }
@@ -1432,17 +1538,19 @@ mod tests {
                     (if x (quote y)))",
                 expect![[r#"
                     mod (#script ()) @0:0..283
-                      {list 0:200..83
-                        {λ 0:200..83
-                          ({|x 1| 0:207..1} {|y 2| 0:238..1})
-                          #f
-                          {if 0:266..16
-                            {var |x 1| (#script ()) 0:270..1}
-                            {quote 0:272..9
-                              {var |y| (()) 0:279..1}}
-                            {void 0:266..16}}}
-                        {#t 0:209..2}
-                        {#\a 0:240..3}}
+                      {letrec 0:0..283
+                        ()
+                        {list 0:200..83
+                          {λ 0:200..83
+                            ({|x 1| 0:207..1} {|y 2| 0:238..1})
+                            #f
+                            {if 0:266..16
+                              {var |x 1| (#script ()) 0:270..1}
+                              {quote 0:272..9
+                                {var |y| (()) 0:279..1}}
+                              {void 0:266..16}}}
+                          {#t 0:209..2}
+                          {#\a 0:240..3}}}
                 "#]],
             );
         }
@@ -1457,9 +1565,11 @@ mod tests {
                   (id #\a)",
                 expect![[r#"
                     mod (#script ()) @0:0..183
-                      {list 0:175..8
-                        {var |id| (ID ()) 0:176..2}
-                        {#\a 0:179..3}}
+                      {letrec 0:0..183
+                        ()
+                        {list 0:175..8
+                          {var |id| (ID ()) 0:176..2}
+                          {#\a 0:179..3}}}
                 "#]],
             );
         }
@@ -1473,10 +1583,12 @@ mod tests {
                   (lambda (x) x)",
                 expect![[r#"
                     mod (#script ()) @0:0..160
-                      {λ 0:146..14
-                        ({|x 1| 0:155..1})
-                        #f
-                        {var |x 1| (#script ()) 0:158..1}}
+                      {letrec 0:0..160
+                        ()
+                        {λ 0:146..14
+                          ({|x 1| 0:155..1})
+                          #f
+                          {var |x 1| (#script ()) 0:158..1}}}
                 "#]],
             );
         }
@@ -1488,8 +1600,10 @@ mod tests {
                   #\a",
                 expect![[r#"
                     mod (#script ()) @0:0..24
-                      {#t 0:0..2}
-                      {#\a 0:21..3}
+                      {letrec 0:0..24
+                        ()
+                        {#t 0:0..2}
+                        {#\a 0:21..3}}
                 "#]],
             );
         }
@@ -1501,10 +1615,12 @@ mod tests {
                  (lambda (x) x)",
                 expect![[r#"
                     mod (#script ()) @0:0..64
-                      {λ 0:50..14
-                        ({|x 1| 0:59..1})
-                        #f
-                        {var |x 1| (#script ()) 0:62..1}}
+                      {letrec 0:0..64
+                        ()
+                        {λ 0:50..14
+                          ({|x 1| 0:59..1})
+                          #f
+                          {var |x 1| (#script ()) 0:62..1}}}
                 "#]],
             );
             check(
@@ -1512,10 +1628,12 @@ mod tests {
                  (if #t #f)",
                 expect![[r#"
                     mod (#script ()) @0:0..60
-                      {if 0:50..10
-                        {#t 0:54..2}
-                        {#f 0:57..2}
-                        {void 0:50..10}}
+                      {letrec 0:0..60
+                        ()
+                        {if 0:50..10
+                          {#t 0:54..2}
+                          {#f 0:57..2}
+                          {void 0:50..10}}}
                 "#]],
             );
         }

@@ -16,7 +16,7 @@ use crate::{
     expander::{Binding, ExpanderResult},
     file::{FileId, SourceFile},
     syntax::{
-        ast::{ModuleInterface, ModuleName},
+        ast::{ModId, ModuleInterface, ModuleName},
         parser::ParseResult,
     },
 };
@@ -152,12 +152,20 @@ build_system! {
             key: FileId,
             result: Option<Rc<SourceFile>>,
         },
+
         {
             name: parse,
             provider: providers::parse_provider,
             key: PathBuf,
             result: Res<ParseResult>,
         },
+        {
+            name: expand,
+            provider: providers::expand_provider,
+            key: ModuleName,
+            result: Res<ExpanderResult>,
+        },
+
         {
             name: lookup_module_name,
             provider: providers::lookup_module_name_provider,
@@ -171,16 +179,22 @@ build_system! {
             result: Res<Rc<ModuleInterface>>,
         },
         {
+            name: module_id,
+            provider: providers::module_id_provider,
+            key: ModuleName,
+            result: ModId,
+        },
+        {
+            name: resolve_module_id,
+            provider: providers::resolve_module_id_provider,
+            key: ModId,
+            result: ModuleName,
+        },
+        {
             name: root_binding_env,
             provider: providers::root_binding_env_provider,
             key: (),
             result: Rc<Env<'static, String, Binding>>,
-        },
-        {
-            name: expand,
-            provider: providers::expand_provider,
-            key: ModuleName,
-            result: Res<ExpanderResult>,
         },
     ],
     inputs: [

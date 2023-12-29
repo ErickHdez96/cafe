@@ -6,7 +6,7 @@ use crate::{
     },
 };
 
-use super::{scopes::Scope, Binding, Expander};
+use super::{items_to_letrec, scopes::Scope, Binding, Expander};
 
 /// Expands a module declaration.
 ///
@@ -124,9 +124,10 @@ pub fn module(expander: &mut Expander, syn: SynList) {
         Module {
             span: syn_span,
             name,
-            items,
+            //items,
             exports: exported_bindings,
             bindings: Env::with_bindings(bindings.into_bindings()),
+            body: items_to_letrec(items, syn_span),
         },
     );
     expander.exit_module();

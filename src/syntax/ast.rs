@@ -1,9 +1,11 @@
 use std::fmt;
 
-use crate::{env::Env, expander::Binding, span::Span};
+use crate::{env::Env, expander::Binding, new_id, span::Span};
 
 const INDENTATION_WIDTH: usize = 2;
 
+/// A [`ModuleName`] comprises of its individual path components (e.g. rnrs io simple) which must be
+/// valid identifiers, and its optional version (e.g. 1 0 1).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ModuleName {
     pub paths: Vec<String>,
@@ -11,6 +13,8 @@ pub struct ModuleName {
 }
 
 impl ModuleName {
+    /// Returns a special [`ModuleName`] identifying the root of the module tree when compiling a
+    /// project.
     pub fn script() -> Self {
         Self {
             paths: vec![String::from("#script")],
@@ -35,24 +39,32 @@ impl fmt::Display for ModuleName {
     }
 }
 
+/// A [`ModuleInterface`] is the outer view of a [`Module`] as seen from another [`Module`]. It
+/// contains its location, name and its list of exported bindings.
 #[derive(Debug, Clone, Hash)]
 pub struct ModuleInterface {
     pub span: Span,
     pub name: ModuleName,
     // TODO: bring Binding here
+    /// Exported bindings.
     pub bindings: Env<'static, String, Binding>,
 }
+
+new_id!(pub ModId);
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Module {
     pub span: Span,
     pub name: ModuleName,
-    pub items: Vec<Item>,
+    /// Bindings exported from the Module.
     pub exports: Env<'static, String, Binding>,
+    /// All the root bindings (e.g. macro, value) of the module.
     pub bindings: Env<'static, String, Binding>,
+    pub body: Expr,
 }
 
 impl Module {
+    /// Returns the interface defining the module.
     pub fn to_interface(&self) -> ModuleInterface {
         ModuleInterface {
             span: self.span,
@@ -69,26 +81,16 @@ impl fmt::Debug for Module {
             let padding = " ".repeat(width);
             write!(
                 f,
-                "{padding}mod {} @{}{}",
+                "{padding}mod {} @{}\n{:#width$?}",
                 self.name,
                 self.span,
-                if self.items.is_empty() {
-                    String::new()
-                } else {
-                    format!(
-                        "\n{}",
-                        self.items
-                            .iter()
-                            .map(|i| format!("{i:#width$?}", width = width + INDENTATION_WIDTH))
-                            .collect::<Vec<_>>()
-                            .join("\n"),
-                    )
-                }
+                self.body,
+                width = width + INDENTATION_WIDTH
             )
         } else {
             f.debug_struct("Module")
                 .field("span", &self.span)
-                .field("items", &self.items)
+                .field("body", &self.body)
                 .finish()
         }
     }
@@ -212,6 +214,10 @@ pub struct Expr {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ExprKind {
+    LetRec {
+        defs: Vec<Define>,
+        exprs: Vec<Expr>,
+    },
     Quote(Box<Expr>),
     If(Box<Expr>, Box<Expr>, Box<Expr>),
     Lambda {
@@ -226,6 +232,7 @@ pub enum ExprKind {
     Var(Path),
     Error(Box<Item>),
     Void,
+    Begin(Vec<Expr>),
 }
 
 impl Expr {
@@ -331,7 +338,7 @@ impl fmt::Debug for Expr {
                 ExprKind::Error(e) => {
                     write!(
                         f,
-                        "{indentation}{{error {} \n{e:#width$?}}}",
+                        "{indentation}{{error {}\n{e:#width$?}}}",
                         self.span,
                         width = width + INDENTATION_WIDTH
                     )
@@ -351,6 +358,37 @@ impl fmt::Debug for Expr {
                     width = width + INDENTATION_WIDTH,
                 ),
                 ExprKind::Void => write!(f, "{indentation}{{void {}}}", self.span),
+                ExprKind::LetRec { defs, exprs } => write!(
+                    f,
+                    "{indentation}{{letrec {}\n{}\n{}}}",
+                    self.span,
+                    if defs.is_empty() {
+                        format!("{}()", " ".repeat(width + INDENTATION_WIDTH))
+                    } else {
+                        defs.iter()
+                            .map(|d| format!("{d:#width$?}", width = width + INDENTATION_WIDTH))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    },
+                    if exprs.is_empty() {
+                        panic!("must always have at least one expression")
+                    } else {
+                        exprs
+                            .iter()
+                            .map(|d| format!("{d:#width$?}", width = width + INDENTATION_WIDTH))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    },
+                ),
+                ExprKind::Begin(exprs) => write!(
+                    f,
+                    "{indentation}{{begin\n{}}}",
+                    exprs
+                        .iter()
+                        .map(|e| format!("{e:#width$?}", width = width + INDENTATION_WIDTH))
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                ),
             }
         } else {
             f.debug_struct("Expr")
