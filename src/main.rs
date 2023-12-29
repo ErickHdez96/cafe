@@ -6,7 +6,6 @@ use cafe::{
     diagnostics::{emit_diagnostic, emit_diagnostics},
     expander::core_expander_interface,
     syntax::ast::ModuleName,
-    utils::Intern,
     BuildSystem,
 };
 
@@ -33,7 +32,7 @@ fn main() {
         Ok(res) => {
             println!("{:#?}", res.module);
             emit_diagnostics(&qctx, &res.diagnostics);
-            let diags = qctx.typeck(ModuleName::script().intern());
+            let diags = qctx.typeck(ModuleName::script());
             emit_diagnostics(&qctx, &diags);
         }
         Err(e) => {

@@ -1,6 +1,13 @@
 use std::fmt;
 
-use crate::{env::Env, expander::Binding, interner::Store, new_id, span::Span};
+use crate::{
+    env::Env,
+    expander::Binding,
+    interner::Store,
+    new_id,
+    span::Span,
+    utils::{Intern, Resolve},
+};
 
 const INDENTATION_WIDTH: usize = 2;
 
@@ -15,11 +22,20 @@ pub struct ModuleName {
 impl ModuleName {
     /// Returns a special [`ModuleName`] identifying the root of the module tree when compiling a
     /// project.
-    pub fn script() -> Self {
+    pub fn script() -> ModId {
         Self {
             paths: vec![String::from("#script")],
             versions: vec![],
         }
+        .intern()
+    }
+
+    pub fn from_strings(strs: Vec<impl Into<String>>) -> ModId {
+        Self {
+            paths: strs.into_iter().map(|s| s.into()).collect(),
+            versions: vec![],
+        }
+        .intern()
     }
 }
 
@@ -43,8 +59,8 @@ impl fmt::Display for ModuleName {
 /// contains its location, name and its list of exported bindings.
 #[derive(Debug, Clone, Hash)]
 pub struct ModuleInterface {
+    pub id: ModId,
     pub span: Span,
-    pub name: ModuleName,
     // TODO: bring Binding here
     /// Exported bindings.
     pub bindings: Env<'static, String, Binding>,
@@ -55,8 +71,8 @@ new_id!(pub ModId, ModuleName, modules);
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Module {
+    pub id: ModId,
     pub span: Span,
-    pub name: ModuleName,
     pub dependencies: Vec<ModId>,
     /// Bindings exported from the Module.
     pub exports: Env<'static, String, Binding>,
@@ -70,7 +86,7 @@ impl Module {
     pub fn to_interface(&self) -> ModuleInterface {
         ModuleInterface {
             span: self.span,
-            name: self.name.clone(),
+            id: self.id,
             bindings: self.exports.clone(),
             dependencies: self.dependencies.clone(),
         }
@@ -85,7 +101,7 @@ impl fmt::Debug for Module {
             write!(
                 f,
                 "{padding}mod {} @{}\n{:#width$?}",
-                self.name,
+                self.id.resolve(),
                 self.span,
                 self.body,
                 width = width + INDENTATION_WIDTH
@@ -122,7 +138,7 @@ impl fmt::Debug for Ident {
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Path {
     pub span: Span,
-    pub module: ModuleName,
+    pub module: ModId,
     pub value: String,
 }
 
@@ -133,7 +149,9 @@ impl fmt::Debug for Path {
             write!(
                 f,
                 "{padding}{{|{}| {} {}}}",
-                self.value, self.module, self.span
+                self.value,
+                self.module.resolve(),
+                self.span
             )
         } else {
             f.debug_struct("Ident")
@@ -310,7 +328,9 @@ impl fmt::Debug for Expr {
                     write!(
                         f,
                         "{indentation}{{var |{}| {} {}}}",
-                        path.value, path.module, self.span
+                        path.value,
+                        path.module.resolve(),
+                        self.span
                     )
                 }
                 ExprKind::Lambda {

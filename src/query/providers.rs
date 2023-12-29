@@ -7,12 +7,12 @@ use crate::{
     expander::{expand_root, Binding, ExpanderResult},
     file::{FileId, SourceFile},
     syntax::{
-        ast::{ModId, Module, ModuleInterface, ModuleName},
+        ast::{ModId, Module, ModuleInterface},
         cst::SynRoot,
         parser::{parse_source_file, ParseResult},
     },
     tyc::typecheck_module,
-    utils::{Intern, Resolve},
+    utils::Resolve,
 };
 
 use super::{QCtx, Res};
@@ -34,14 +34,14 @@ pub fn root_binding_env_provider(_: &QCtx, _: ()) -> Rc<Env<'static, String, Bin
 }
 
 pub fn register_intrinsic_lib(lib: ModuleInterface) {
-    INTRINSIC_LIBRARIES.with(|i| i.borrow_mut().insert(lib.name.clone(), Rc::new(lib)));
+    INTRINSIC_LIBRARIES.with(|i| i.borrow_mut().insert(lib.id, Rc::new(lib)));
 }
 
-pub fn register_lib((name, lib): (ModuleName, Module)) {
+pub fn register_lib((name, lib): (ModId, Module)) {
     REGISTERED_LIBRARIES.with(|i| i.borrow_mut().insert(name, Rc::new(lib)));
 }
 
-pub fn register_module_name((name, path): (ModuleName, PathBuf)) {
+pub fn register_module_name((name, path): (ModId, PathBuf)) {
     REGISTERED_MODULE_NAMES.with(|m| m.borrow_mut().insert(name, path));
 }
 
@@ -88,59 +88,58 @@ pub fn parse_provider(qctx: &QCtx, path: PathBuf) -> Res<ParseResult> {
     Ok(parse_source_file(&source_file, config.parser))
 }
 
-pub fn lookup_module_name_provider(_qctx: &QCtx, module_name: ModuleName) -> Res<PathBuf> {
-    if let Some(path) = REGISTERED_MODULE_NAMES.with(|m| m.borrow().get(&module_name).cloned()) {
+pub fn lookup_module_name_provider(_qctx: &QCtx, mid: ModId) -> Res<PathBuf> {
+    if let Some(path) = REGISTERED_MODULE_NAMES.with(|m| m.borrow().get(&mid).cloned()) {
         Ok(path)
     } else {
         todo!()
     }
 }
 
-pub fn module_interface_provider(_qctx: &QCtx, mod_id: ModId) -> Res<Rc<ModuleInterface>> {
-    let module_name = mod_id.resolve();
-    let lib = INTRINSIC_LIBRARIES.with(|i| i.borrow().get(module_name).map(Rc::clone));
+pub fn module_interface_provider(_qctx: &QCtx, mid: ModId) -> Res<Rc<ModuleInterface>> {
+    let lib = INTRINSIC_LIBRARIES.with(|i| i.borrow().get(&mid).map(Rc::clone));
     if let Some(intrinsics_lib) = lib {
         Ok(intrinsics_lib)
     } else {
-        let registered_lib =
-            REGISTERED_LIBRARIES.with(|i| i.borrow().get(module_name).map(Rc::clone));
+        let registered_lib = REGISTERED_LIBRARIES.with(|i| i.borrow().get(&mid).map(Rc::clone));
         if let Some(registered_lib) = registered_lib {
             Ok(Rc::new(registered_lib.to_interface()))
         } else {
             Err(Diagnostic::builder()
-                .msg(format!("module not found: {module_name}"))
+                .msg(format!("module not found: {}", mid.resolve()))
                 .finish())
         }
     }
 }
 
 // TODO: use modid?
-pub fn expand_provider(qctx: &QCtx, module_name: ModuleName) -> Res<ExpanderResult> {
-    let pathbuf = qctx.lookup_module_name(module_name)?;
+pub fn expand_provider(qctx: &QCtx, mid: ModId) -> Res<Rc<ExpanderResult>> {
+    let pathbuf = qctx.lookup_module_name(mid)?;
     let mut parse_res = qctx.parse(pathbuf)?;
     let syn = SynRoot::new(&parse_res.tree, parse_res.file_id);
     let root_binding_env = qctx.root_binding_env(());
     let mut expander_res = expand_root(
         syn,
         root_binding_env.as_ref(),
-        |mname| qctx.module_interface(mname.intern()),
+        |mid| qctx.module_interface(mid),
         |mname, module| register_lib((mname, module)),
     );
     parse_res
         .diagnostics
         .extend(std::mem::take(&mut expander_res.diagnostics));
     expander_res.diagnostics = parse_res.diagnostics;
-    Ok(expander_res)
+    Ok(Rc::new(expander_res))
 }
 
 // TODO: move diagnostics to a central place. CompilerSession
 pub fn typeck_provider(qctx: &QCtx, mod_id: ModId) -> Vec<Diagnostic> {
     let mut diags = vec![];
-    let module = match qctx.expand(mod_id.resolve().clone()) {
+    let module = match qctx.expand(mod_id) {
         Ok(m) => m,
         Err(d) => return vec![d],
     };
-    diags.extend(module.diagnostics);
+    diags.extend_from_slice(&module.diagnostics);
+    // Move somewhere else?
     match qctx.dependencies(mod_id) {
         Ok(deps) => {
             for dep in deps {
@@ -151,7 +150,7 @@ pub fn typeck_provider(qctx: &QCtx, mod_id: ModId) -> Vec<Diagnostic> {
             diags.push(d);
         }
     }
-    typecheck_module(qctx, &module.module);
+    diags.extend(typecheck_module(&module.module));
     diags
 }
 
@@ -167,7 +166,7 @@ thread_local! {
 
     static COMPILER_CONFIG: RefCell<Rc<CompilerConfig>> = RefCell::default();
     static ROOT_BINDING_ENV: RefCell<Rc<Env<'static, String, Binding>>> = RefCell::default();
-    static INTRINSIC_LIBRARIES: RefCell<HashMap<ModuleName, Rc<ModuleInterface>>> = RefCell::default();
-    static REGISTERED_MODULE_NAMES: RefCell<HashMap<ModuleName, PathBuf>> = RefCell::default();
-    static REGISTERED_LIBRARIES: RefCell<HashMap<ModuleName, Rc<Module>>> = RefCell::default();
+    static INTRINSIC_LIBRARIES: RefCell<HashMap<ModId, Rc<ModuleInterface>>> = RefCell::default();
+    static REGISTERED_MODULE_NAMES: RefCell<HashMap<ModId, PathBuf>> = RefCell::default();
+    static REGISTERED_LIBRARIES: RefCell<HashMap<ModId, Rc<Module>>> = RefCell::default();
 }

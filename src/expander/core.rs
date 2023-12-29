@@ -4,7 +4,7 @@ use crate::{
     env::Env,
     span::Span,
     syntax::{
-        ast::{self, ModuleName},
+        ast,
         cst::{RedTree, SynExp, SynList, SynSymbol},
     },
 };
@@ -127,11 +127,8 @@ pub fn lambda_transformer(
     let mut formals = vec![];
     let mut rest = None;
     for f in &formal_binds {
-        let mut binding = Binding::new_var(
-            f.value(),
-            expander.current_module().clone(),
-            f.scopes().clone(),
-        );
+        let mut binding =
+            Binding::new_var(f.value(), expander.current_module(), f.scopes().clone());
         binding.scopes_mut().add(lambda_scope);
         if let Binding::Value {
             orig_name, name, ..
@@ -146,11 +143,8 @@ pub fn lambda_transformer(
     }
 
     if let Some(r) = &rest_bind {
-        let mut binding = Binding::new_var(
-            r.value(),
-            expander.current_module().clone(),
-            r.scopes().clone(),
-        );
+        let mut binding =
+            Binding::new_var(r.value(), expander.current_module(), r.scopes().clone());
         binding.scopes_mut().add(lambda_scope);
         if let Binding::Value {
             orig_name, name, ..
@@ -348,7 +342,7 @@ pub fn quote_transformer(
     children.next();
 
     let expr = match children.next() {
-        Some(e) => quote_expr(e),
+        Some(e) => quote_expr(expander, e),
         None => quote_missing_expr(expander, &red, span),
     };
 
@@ -364,16 +358,16 @@ pub fn quote_transformer(
     expr
 }
 
-fn quote_expr(syn: SynExp) -> ast::Expr {
+fn quote_expr(expander: &Expander, syn: SynExp) -> ast::Expr {
     let span = syn.source_span();
     match syn {
         SynExp::List(l) => ast::Expr {
             span,
             kind: {
                 let (sexps, dot) = l.into_parts();
-                let sexps = sexps.into_iter().map(quote_expr).collect();
+                let sexps = sexps.into_iter().map(|s| quote_expr(expander, s)).collect();
                 if let Some(dot) = dot {
-                    ast::ExprKind::DottedList(sexps, Box::new(quote_expr(*dot)))
+                    ast::ExprKind::DottedList(sexps, Box::new(quote_expr(expander, *dot)))
                 } else {
                     ast::ExprKind::List(sexps)
                 }
@@ -383,10 +377,7 @@ fn quote_expr(syn: SynExp) -> ast::Expr {
             span,
             kind: ast::ExprKind::Var(ast::Path {
                 span,
-                module: ModuleName {
-                    paths: vec![],
-                    versions: vec![],
-                },
+                module: expander.current_module(),
                 value: s.value().to_string(),
             }),
         },

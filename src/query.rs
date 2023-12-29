@@ -16,7 +16,7 @@ use crate::{
     expander::{Binding, ExpanderResult},
     file::{FileId, SourceFile},
     syntax::{
-        ast::{ModId, ModuleInterface, ModuleName},
+        ast::{ModId, ModuleInterface},
         parser::ParseResult,
     },
 };
@@ -162,8 +162,8 @@ build_system! {
         {
             name: expand,
             provider: providers::expand_provider,
-            key: ModuleName,
-            result: Res<ExpanderResult>,
+            key: ModId,
+            result: Res<Rc<ExpanderResult>>,
         },
         {
             name: typeck,
@@ -175,7 +175,7 @@ build_system! {
         {
             name: lookup_module_name,
             provider: providers::lookup_module_name_provider,
-            key: ModuleName,
+            key: ModId,
             result: Res<PathBuf>,
         },
         {
@@ -214,7 +214,7 @@ build_system! {
         {
             name: feed_module_name,
             setter: providers::register_module_name,
-            ty: (ModuleName, PathBuf),
+            ty: (ModId, PathBuf),
         },
         {
             name: feed_source_file,

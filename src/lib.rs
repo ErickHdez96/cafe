@@ -1,4 +1,3 @@
-pub mod atom;
 pub mod atty;
 pub mod config;
 pub mod diagnostics;

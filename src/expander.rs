@@ -11,7 +11,6 @@ use crate::{
         cst::{GreenTree, RedTree, SynExp, SynList, SynRoot, SynSymbol},
         SyntaxKind,
     },
-    utils::Intern,
 };
 
 use self::{
@@ -78,27 +77,20 @@ pub fn core_expander_interface() -> ModuleInterface {
         },
     );
     ModuleInterface {
+        id: ModuleName::from_strings(vec!["rnrs", "expander", "core"]),
         span: Span::dummy(),
-        name: ModuleName {
-            paths: vec![
-                String::from("rnrs"),
-                String::from("expander"),
-                String::from("core"),
-            ],
-            versions: vec![],
-        },
         bindings: core,
         dependencies: vec![],
     }
 }
 
 pub struct Expander<'i> {
-    import: &'i dyn Fn(ModuleName) -> Result<Rc<ModuleInterface>, Diagnostic>,
-    register: &'i dyn Fn(ModuleName, Module),
+    import: &'i dyn Fn(ModId) -> Result<Rc<ModuleInterface>, Diagnostic>,
+    register: &'i dyn Fn(ModId, Module),
     diagnostics: Vec<Diagnostic>,
-    module: ModuleName,
+    module: ModId,
     dependencies: Vec<ModId>,
-    module_stack: Vec<(ModuleName, Vec<ModId>)>,
+    module_stack: Vec<(ModId, Vec<ModId>)>,
 }
 
 impl fmt::Debug for Expander<'_> {
@@ -120,7 +112,7 @@ pub enum Binding {
         scopes: Scopes,
         /// The [`Module`] where it comes from. Macros uses may introduce bindings from other
         /// modules without needing to import them.
-        orig_module: ModuleName,
+        orig_module: ModId,
         /// The name as given in the lexical source. For debug and diagnostics.
         orig_name: String,
         /// Name used to identify ambigous identifiers after macro expansion. For debug and
@@ -166,7 +158,7 @@ pub enum Binding {
 
 impl Binding {
     /// Returns a new [`Binding::Value`] [`Binding`].
-    pub fn new_var(name: &str, orig_module: ModuleName, scopes: Scopes) -> Self {
+    pub fn new_var(name: &str, orig_module: ModId, scopes: Scopes) -> Self {
         Self::Value {
             scopes,
             orig_name: name.to_string(),
@@ -230,8 +222,8 @@ impl Binding {
 pub fn expand_root(
     syn: SynRoot,
     base_env: &Env<'_, String, Binding>,
-    import: impl Fn(ModuleName) -> Result<Rc<ModuleInterface>, Diagnostic>,
-    register: impl Fn(ModuleName, Module),
+    import: impl Fn(ModId) -> Result<Rc<ModuleInterface>, Diagnostic>,
+    register: impl Fn(ModId, Module),
 ) -> ExpanderResult {
     let mut expander = Expander {
         import: &import,
@@ -242,19 +234,12 @@ pub fn expand_root(
         diagnostics: vec![],
     };
 
-    let name = ModuleName {
-        paths: vec![
-            String::from("rnrs"),
-            String::from("expander"),
-            String::from("intrinsics"),
-        ],
-        versions: vec![],
-    };
+    let mid = ModuleName::from_strings(vec!["rnrs", "expander", "intrinsics"]);
     (expander.register)(
-        name.clone(),
+        mid,
         Module {
             span: Span::dummy(),
-            name,
+            id: mid,
             dependencies: vec![],
             exports: intrinsics_env(),
             bindings: Env::default(),
@@ -296,14 +281,11 @@ impl Expander<'_> {
         let root_scope = Scope::new();
         let mut bindings = base_env.enter();
         let mut deferred = vec![];
-        let intrinsics = (self.import)(ModuleName {
-            paths: vec![
-                String::from("rnrs"),
-                String::from("expander"),
-                String::from("intrinsics"),
-            ],
-            versions: vec![],
-        })
+        let intrinsics = (self.import)(ModuleName::from_strings(vec![
+            "rnrs",
+            "expander",
+            "intrinsics",
+        ]))
         .unwrap();
         for (v, b) in intrinsics.bindings.bindings() {
             bindings.insert(v.clone(), b.clone());
@@ -325,8 +307,8 @@ impl Expander<'_> {
 
         ExpanderResult {
             module: Module {
+                id: ModuleName::script(),
                 span: syn.span(),
-                name: ModuleName::script(),
                 exports: Env::default(),
                 bindings: Env::with_bindings(bindings.into_bindings()),
                 dependencies: std::mem::take(&mut self.dependencies),
@@ -362,7 +344,7 @@ impl Expander<'_> {
                             s.value().to_string(),
                             Binding::Value {
                                 scopes: scopes.clone(),
-                                orig_module: self.current_module().clone(),
+                                orig_module: self.current_module(),
                                 orig_name: s.value().to_string(),
                                 name: Some(s.value().to_string()),
                             },
@@ -420,7 +402,7 @@ impl Expander<'_> {
                     span,
                     kind: ast::ExprKind::Var(ast::Path {
                         span,
-                        module: orig_module.clone(),
+                        module: *orig_module,
                         value: name.as_ref().unwrap_or(orig_name).to_string(),
                     }),
                 },
@@ -433,7 +415,7 @@ impl Expander<'_> {
                         span,
                         kind: ast::ExprKind::Var(ast::Path {
                             span,
-                            module: self.current_module().clone(),
+                            module: self.current_module(),
                             value: s.value().to_string(),
                         }),
                     }
@@ -589,16 +571,16 @@ impl Expander<'_> {
         exprs
     }
 
-    fn import(&mut self, mname: ModuleName) -> Result<Rc<ModuleInterface>, Diagnostic> {
-        self.dependencies.push(mname.clone().intern());
-        (self.import)(mname)
+    fn import(&mut self, mid: ModId) -> Result<Rc<ModuleInterface>, Diagnostic> {
+        self.dependencies.push(mid);
+        (self.import)(mid)
     }
 
-    fn current_module(&self) -> &ModuleName {
-        &self.module
+    const fn current_module(&self) -> ModId {
+        self.module
     }
 
-    fn enter_module(&mut self, module: ModuleName) {
+    fn enter_module(&mut self, module: ModId) {
         self.module_stack.push((
             std::mem::replace(&mut self.module, module),
             std::mem::take(&mut self.dependencies),
@@ -943,30 +925,26 @@ mod tests {
 
     use expect_test::{expect, Expect};
 
-    use crate::syntax::{cst::SynRoot, parser::parse_str};
+    use crate::{
+        syntax::{cst::SynRoot, parser::parse_str},
+        utils::Resolve,
+    };
 
     use super::*;
 
     struct Libs {
-        libs: RefCell<HashMap<ModuleName, Module>>,
+        libs: RefCell<HashMap<ModId, Module>>,
     }
 
     impl Default for Libs {
         fn default() -> Self {
-            let core_name = ModuleName {
-                paths: vec![
-                    String::from("rnrs"),
-                    String::from("expander"),
-                    String::from("core"),
-                ],
-                versions: vec![],
-            };
+            let mid = ModuleName::from_strings(vec!["rnrs", "expander", "core"]);
             Self {
                 libs: RefCell::new(HashMap::from([(
-                    core_name.clone(),
+                    mid,
                     Module {
+                        id: mid,
                         span: Span::dummy(),
-                        name: core_name,
                         dependencies: vec![],
                         exports: core_env(),
                         bindings: Env::default(),
@@ -987,18 +965,18 @@ mod tests {
     }
 
     impl Libs {
-        fn import(&self, name: ModuleName) -> Result<Rc<ModuleInterface>, Diagnostic> {
+        fn import(&self, mid: ModId) -> Result<Rc<ModuleInterface>, Diagnostic> {
             Ok(Rc::new(
                 self.libs
                     .borrow()
-                    .get(&name)
-                    .expect(&format!("{name}"))
+                    .get(&mid)
+                    .expect(&format!("{}", mid.resolve()))
                     .to_interface(),
             ))
         }
 
-        fn define(&self, name: ModuleName, module: Module) {
-            self.libs.borrow_mut().insert(name, module);
+        fn define(&self, mid: ModId, module: Module) {
+            self.libs.borrow_mut().insert(mid, module);
         }
     }
 
@@ -1048,14 +1026,7 @@ mod tests {
             String::from("cons"),
             Binding::Value {
                 scopes: Scopes::core(),
-                orig_module: ModuleName {
-                    paths: vec![
-                        "rnrs".to_string(),
-                        "expander".to_string(),
-                        "core".to_string(),
-                    ],
-                    versions: vec![],
-                },
+                orig_module: ModuleName::from_strings(vec!["rnrs", "expander", "core"]),
                 orig_name: String::from("cons"),
                 name: None,
             },
@@ -1318,14 +1289,14 @@ mod tests {
             "(quote x)",
             expect![[r#"
                 {quote 0:0..9
-                  {var |x| (()) 0:7..1}}
+                  {var |x| (#script ()) 0:7..1}}
             "#]],
         );
         check(
             "(quote x)",
             expect![[r#"
                 {quote 0:0..9
-                  {var |x| (()) 0:7..1}}
+                  {var |x| (#script ()) 0:7..1}}
             "#]],
         );
         check(
@@ -1340,7 +1311,7 @@ mod tests {
             expect![[r#"
                 {quote 0:0..11
                   {list 0:7..3
-                    {var |x| (()) 0:8..1}}}
+                    {var |x| (#script ()) 0:8..1}}}
             "#]],
         );
         check(
@@ -1348,7 +1319,7 @@ mod tests {
             expect![[r#"
                 {quote 0:0..25
                   {dotted-list 0:7..17
-                    {var |x| (()) 0:8..1}
+                    {var |x| (#script ()) 0:8..1}
                     {list 0:10..8
                       {list 0:11..6
                         {#\λ 0:12..4}}}
@@ -1562,7 +1533,7 @@ mod tests {
                             {if 0:266..16
                               {var |x 1| (#script ()) 0:270..1}
                               {quote 0:272..9
-                                {var |y| (()) 0:279..1}}
+                                {var |y| (#script ()) 0:279..1}}
                               {void 0:266..16}}}
                           {#t 0:209..2}
                           {#\a 0:240..3}}}

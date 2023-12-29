@@ -1,7 +1,7 @@
 use crate::{
     env::Env,
     syntax::{
-        ast::{Module, ModuleName},
+        ast::{ModId, Module, ModuleName},
         cst::{SynExp, SynList},
     },
 };
@@ -20,9 +20,9 @@ pub fn module(expander: &mut Expander, syn: SynList) {
     let (sexps, _) = syn.into_parts();
     let mut sexps = sexps.into_iter();
 
-    let name = if let Some(sexp) = sexps.nth(1) {
-        if let Some(name) = parse_module_name(expander, sexp) {
-            name
+    let mid = if let Some(sexp) = sexps.nth(1) {
+        if let Some(mid) = parse_module_name(expander, sexp) {
+            mid
         } else {
             return;
         }
@@ -36,7 +36,7 @@ pub fn module(expander: &mut Expander, syn: SynList) {
         });
         return;
     };
-    expander.enter_module(name.clone());
+    expander.enter_module(mid);
 
     let mut exports = vec![];
     match sexps.next() {
@@ -76,14 +76,11 @@ pub fn module(expander: &mut Expander, syn: SynList) {
     let module_scope = Scope::new();
     let mut bindings = Env::new();
     let mut deferred = vec![];
-    let intrinsics = (expander.import)(ModuleName {
-        paths: vec![
-            String::from("rnrs"),
-            String::from("expander"),
-            String::from("intrinsics"),
-        ],
-        versions: vec![],
-    })
+    let intrinsics = (expander.import)(ModuleName::from_strings(vec![
+        "rnrs",
+        "expander",
+        "intrinsics",
+    ]))
     .unwrap();
     for (v, b) in intrinsics.bindings.bindings() {
         bindings.insert(v.clone(), b.clone());
@@ -120,10 +117,10 @@ pub fn module(expander: &mut Expander, syn: SynList) {
     }
 
     (expander.register)(
-        name.clone(),
+        mid,
         Module {
             span: syn_span,
-            name,
+            id: mid,
             dependencies: std::mem::take(&mut expander.dependencies),
             exports: exported_bindings,
             bindings: Env::with_bindings(bindings.into_bindings()),
@@ -141,10 +138,10 @@ pub fn import(expander: &mut Expander, syn: SynList, env: &mut Env<String, Bindi
     let mut sexps = sexps.into_iter();
     assert!(sexps.next().is_some());
 
-    let (name, span) = if let Some(sexp) = sexps.next() {
+    let (mid, span) = if let Some(sexp) = sexps.next() {
         let span = sexp.source_span();
-        if let Some(name) = parse_module_name(expander, sexp) {
-            (name, span)
+        if let Some(mid) = parse_module_name(expander, sexp) {
+            (mid, span)
         } else {
             return;
         }
@@ -158,7 +155,7 @@ pub fn import(expander: &mut Expander, syn: SynList, env: &mut Env<String, Bindi
         return;
     };
 
-    match expander.import(name) {
+    match expander.import(mid) {
         Ok(i) => {
             for (v, b) in i.bindings.bindings() {
                 if env.has_immediate(v) {
@@ -180,7 +177,7 @@ pub fn import(expander: &mut Expander, syn: SynList, env: &mut Env<String, Bindi
     }
 }
 
-fn parse_module_name(expander: &mut Expander, syn: SynExp) -> Option<ModuleName> {
+fn parse_module_name(expander: &mut Expander, syn: SynExp) -> Option<ModId> {
     let span = syn.source_span();
     match syn {
         SynExp::List(l) => {
@@ -210,10 +207,7 @@ fn parse_module_name(expander: &mut Expander, syn: SynExp) -> Option<ModuleName>
                 });
                 None
             } else {
-                Some(ModuleName {
-                    paths,
-                    versions: vec![],
-                })
+                Some(ModuleName::from_strings(paths))
             }
         }
         sexp => {
