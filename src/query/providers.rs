@@ -1,9 +1,4 @@
-use std::{
-    cell::RefCell,
-    collections::{hash_map::Entry, HashMap},
-    path::PathBuf,
-    rc::Rc,
-};
+use std::{cell::RefCell, collections::HashMap, path::PathBuf, rc::Rc};
 
 use crate::{
     config::CompilerConfig,
@@ -16,6 +11,8 @@ use crate::{
         cst::SynRoot,
         parser::{parse_source_file, ParseResult},
     },
+    tyc::typecheck_module,
+    utils::{Intern, Resolve},
 };
 
 use super::{QCtx, Res};
@@ -99,16 +96,14 @@ pub fn lookup_module_name_provider(_qctx: &QCtx, module_name: ModuleName) -> Res
     }
 }
 
-pub fn module_interface_provider(
-    _qctx: &QCtx,
-    module_name: ModuleName,
-) -> Res<Rc<ModuleInterface>> {
-    let lib = INTRINSIC_LIBRARIES.with(|i| i.borrow().get(&module_name).map(Rc::clone));
+pub fn module_interface_provider(_qctx: &QCtx, mod_id: ModId) -> Res<Rc<ModuleInterface>> {
+    let module_name = mod_id.resolve();
+    let lib = INTRINSIC_LIBRARIES.with(|i| i.borrow().get(module_name).map(Rc::clone));
     if let Some(intrinsics_lib) = lib {
         Ok(intrinsics_lib)
     } else {
         let registered_lib =
-            REGISTERED_LIBRARIES.with(|i| i.borrow().get(&module_name).map(Rc::clone));
+            REGISTERED_LIBRARIES.with(|i| i.borrow().get(module_name).map(Rc::clone));
         if let Some(registered_lib) = registered_lib {
             Ok(Rc::new(registered_lib.to_interface()))
         } else {
@@ -119,6 +114,7 @@ pub fn module_interface_provider(
     }
 }
 
+// TODO: use modid?
 pub fn expand_provider(qctx: &QCtx, module_name: ModuleName) -> Res<ExpanderResult> {
     let pathbuf = qctx.lookup_module_name(module_name)?;
     let mut parse_res = qctx.parse(pathbuf)?;
@@ -127,7 +123,7 @@ pub fn expand_provider(qctx: &QCtx, module_name: ModuleName) -> Res<ExpanderResu
     let mut expander_res = expand_root(
         syn,
         root_binding_env.as_ref(),
-        |mname| qctx.module_interface(mname),
+        |mname| qctx.module_interface(mname.intern()),
         |mname, module| register_lib((mname, module)),
     );
     parse_res
@@ -137,36 +133,37 @@ pub fn expand_provider(qctx: &QCtx, module_name: ModuleName) -> Res<ExpanderResu
     Ok(expander_res)
 }
 
-// could they be moved to a different place?
-pub fn module_id_provider(_qctx: &QCtx, module_name: ModuleName) -> ModId {
-    MOD_NAME_ID_MAPPING.with(|m| match m.borrow_mut().entry(module_name.clone()) {
-        Entry::Occupied(o) => *o.get(),
-        Entry::Vacant(v) => {
-            let id = ModId::new();
-            v.insert(id);
-            MOD_ID_NAME_MAPPING.with(|m| {
-                m.borrow_mut().insert(id, module_name);
-            });
-            id
+// TODO: move diagnostics to a central place. CompilerSession
+pub fn typeck_provider(qctx: &QCtx, mod_id: ModId) -> Vec<Diagnostic> {
+    let mut diags = vec![];
+    let module = match qctx.expand(mod_id.resolve().clone()) {
+        Ok(m) => m,
+        Err(d) => return vec![d],
+    };
+    diags.extend(module.diagnostics);
+    match qctx.dependencies(mod_id) {
+        Ok(deps) => {
+            for dep in deps {
+                diags.extend(qctx.typeck(dep));
+            }
         }
-    })
+        Err(d) => {
+            diags.push(d);
+        }
+    }
+    typecheck_module(qctx, &module.module);
+    diags
 }
 
-pub fn resolve_module_id_provider(_qctx: &QCtx, mod_id: ModId) -> ModuleName {
-    MOD_ID_NAME_MAPPING.with(|m| {
-        m.borrow()
-            .get(&mod_id)
-            .cloned()
-            .unwrap_or_else(|| panic!("module id {mod_id:?} not registered"))
-    })
+pub fn dependencies_provider(qctx: &QCtx, mod_id: ModId) -> Res<Vec<ModId>> {
+    qctx.module_interface(mod_id)
+        .map(|m| m.dependencies.clone())
 }
 
 // TODO: Simplify the inputs
 thread_local! {
     static FILE_MAPPING: RefCell<HashMap<FileId, Rc<SourceFile>>> = RefCell::default();
     static PATH_MAPPING: RefCell<HashMap<PathBuf, FileId>> = RefCell::default();
-    static MOD_NAME_ID_MAPPING: RefCell<HashMap<ModuleName, ModId>> = RefCell::default();
-    static MOD_ID_NAME_MAPPING: RefCell<HashMap<ModId, ModuleName>> = RefCell::default();
 
     static COMPILER_CONFIG: RefCell<Rc<CompilerConfig>> = RefCell::default();
     static ROOT_BINDING_ENV: RefCell<Rc<Env<'static, String, Binding>>> = RefCell::default();

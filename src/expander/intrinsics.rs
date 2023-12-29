@@ -124,7 +124,7 @@ pub fn module(expander: &mut Expander, syn: SynList) {
         Module {
             span: syn_span,
             name,
-            //items,
+            dependencies: std::mem::take(&mut expander.dependencies),
             exports: exported_bindings,
             bindings: Env::with_bindings(bindings.into_bindings()),
             body: items_to_letrec(items, syn_span),
@@ -158,7 +158,7 @@ pub fn import(expander: &mut Expander, syn: SynList, env: &mut Env<String, Bindi
         return;
     };
 
-    match (expander.import)(name) {
+    match expander.import(name) {
         Ok(i) => {
             for (v, b) in i.bindings.bindings() {
                 if env.has_immediate(v) {

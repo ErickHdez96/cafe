@@ -7,10 +7,11 @@ use crate::{
     file::FileId,
     span::Span,
     syntax::{
-        ast::{self, Module, ModuleInterface, ModuleName},
+        ast::{self, ModId, Module, ModuleInterface, ModuleName},
         cst::{GreenTree, RedTree, SynExp, SynList, SynRoot, SynSymbol},
         SyntaxKind,
     },
+    utils::Intern,
 };
 
 use self::{
@@ -87,6 +88,7 @@ pub fn core_expander_interface() -> ModuleInterface {
             versions: vec![],
         },
         bindings: core,
+        dependencies: vec![],
     }
 }
 
@@ -95,7 +97,8 @@ pub struct Expander<'i> {
     register: &'i dyn Fn(ModuleName, Module),
     diagnostics: Vec<Diagnostic>,
     module: ModuleName,
-    module_stack: Vec<ModuleName>,
+    dependencies: Vec<ModId>,
+    module_stack: Vec<(ModuleName, Vec<ModId>)>,
 }
 
 impl fmt::Debug for Expander<'_> {
@@ -235,6 +238,7 @@ pub fn expand_root(
         register: &register,
         module: ModuleName::script(),
         module_stack: vec![],
+        dependencies: vec![],
         diagnostics: vec![],
     };
 
@@ -251,7 +255,7 @@ pub fn expand_root(
         Module {
             span: Span::dummy(),
             name,
-            //items: vec![],
+            dependencies: vec![],
             exports: intrinsics_env(),
             bindings: Env::default(),
             body: ast::Expr {
@@ -323,9 +327,9 @@ impl Expander<'_> {
             module: Module {
                 span: syn.span(),
                 name: ModuleName::script(),
-                //items,
                 exports: Env::default(),
                 bindings: Env::with_bindings(bindings.into_bindings()),
+                dependencies: std::mem::take(&mut self.dependencies),
                 body: items_to_letrec(items, syn.span()),
             },
             diagnostics: std::mem::take(&mut self.diagnostics),
@@ -585,17 +589,24 @@ impl Expander<'_> {
         exprs
     }
 
+    fn import(&mut self, mname: ModuleName) -> Result<Rc<ModuleInterface>, Diagnostic> {
+        self.dependencies.push(mname.clone().intern());
+        (self.import)(mname)
+    }
+
     fn current_module(&self) -> &ModuleName {
         &self.module
     }
 
     fn enter_module(&mut self, module: ModuleName) {
-        self.module_stack
-            .push(std::mem::replace(&mut self.module, module));
+        self.module_stack.push((
+            std::mem::replace(&mut self.module, module),
+            std::mem::take(&mut self.dependencies),
+        ));
     }
 
     fn exit_module(&mut self) {
-        self.module = self.module_stack.pop().unwrap();
+        (self.module, self.dependencies) = self.module_stack.pop().unwrap();
     }
 
     fn emit_error(&mut self, builder: impl Fn(DiagnosticBuilder) -> DiagnosticBuilder) {
@@ -956,7 +967,7 @@ mod tests {
                     Module {
                         span: Span::dummy(),
                         name: core_name,
-                        //items: vec![],
+                        dependencies: vec![],
                         exports: core_env(),
                         bindings: Env::default(),
                         body: ast::Expr {
@@ -1084,6 +1095,7 @@ mod tests {
             register: &|_, _| panic!(),
             module: ModuleName::script(),
             module_stack: vec![],
+            dependencies: vec![],
             diagnostics: vec![],
         };
         let ast = expander.expand_expr(children.next().expect("expected an item"), &env);
@@ -1473,9 +1485,11 @@ mod tests {
     }
 
     mod modules {
+        use crate::utils::Resolve;
+
         use super::*;
 
-        fn check(input: &str, expected: Expect) {
+        fn check(input: &str, expected: Expect) -> ExpanderResult {
             let res = parse_str(input);
             assert_eq!(res.diagnostics, vec![]);
             let syn = SynRoot::new(&res.tree, res.file_id);
@@ -1488,6 +1502,7 @@ mod tests {
             );
             assert_eq!(res.diagnostics, vec![]);
             expected.assert_debug_eq(&res.module);
+            res
         }
 
         #[test]
@@ -1557,7 +1572,7 @@ mod tests {
 
         #[test]
         fn simple_module() {
-            check(
+            let res = check(
                 r"(module (ID ()) (id)
                     (import (rnrs expander core ()))
                     (define id (lambda (x) x)))
@@ -1572,11 +1587,23 @@ mod tests {
                           {#\a 0:179..3}}}
                 "#]],
             );
+
+            assert_eq!(
+                res.module
+                    .dependencies
+                    .iter()
+                    .map(|mid| mid.resolve().clone())
+                    .collect::<Vec<_>>(),
+                vec![ModuleName {
+                    paths: vec![String::from("ID")],
+                    versions: vec![],
+                }]
+            );
         }
 
         #[test]
         fn reexport() {
-            check(
+            let res = check(
                 r"(module (rnrs base ()) (lambda)
                     (import (rnrs expander core ())))
                   (import (rnrs base ()))
@@ -1590,6 +1617,18 @@ mod tests {
                           #f
                           {var |x 1| (#script ()) 0:158..1}}}
                 "#]],
+            );
+
+            assert_eq!(
+                res.module
+                    .dependencies
+                    .iter()
+                    .map(|mid| mid.resolve().clone())
+                    .collect::<Vec<_>>(),
+                vec![ModuleName {
+                    paths: vec![String::from("rnrs"), String::from("base")],
+                    versions: vec![],
+                }]
             );
         }
 
@@ -1623,7 +1662,7 @@ mod tests {
                           {var |x 1| (#script ()) 0:62..1}}}
                 "#]],
             );
-            check(
+            let res = check(
                 "(import (rnrs expander core ()))
                  (if #t #f)",
                 expect![[r#"
@@ -1635,6 +1674,22 @@ mod tests {
                           {#f 0:57..2}
                           {void 0:50..10}}}
                 "#]],
+            );
+
+            assert_eq!(
+                res.module
+                    .dependencies
+                    .iter()
+                    .map(|mid| mid.resolve().clone())
+                    .collect::<Vec<_>>(),
+                vec![ModuleName {
+                    paths: vec![
+                        String::from("rnrs"),
+                        String::from("expander"),
+                        String::from("core")
+                    ],
+                    versions: vec![],
+                }]
             );
         }
     }

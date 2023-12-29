@@ -5,10 +5,12 @@ pub mod diagnostics;
 pub mod env;
 pub mod expander;
 pub mod file;
+mod interner;
 pub mod query;
 pub mod span;
 pub mod syntax;
 pub mod ty;
-mod utils;
+pub mod tyc;
+pub mod utils;
 
 pub use query::BuildSystem;

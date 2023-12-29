@@ -165,6 +165,12 @@ build_system! {
             key: ModuleName,
             result: Res<ExpanderResult>,
         },
+        {
+            name: typeck,
+            provider: providers::typeck_provider,
+            key: ModId,
+            result: Vec<Diagnostic>,
+        },
 
         {
             name: lookup_module_name,
@@ -175,26 +181,33 @@ build_system! {
         {
             name: module_interface,
             provider: providers::module_interface_provider,
-            key: ModuleName,
+            key: ModId,
             result: Res<Rc<ModuleInterface>>,
         },
-        {
-            name: module_id,
-            provider: providers::module_id_provider,
-            key: ModuleName,
-            result: ModId,
-        },
-        {
-            name: resolve_module_id,
-            provider: providers::resolve_module_id_provider,
-            key: ModId,
-            result: ModuleName,
-        },
+        //{
+        //    name: module_id,
+        //    provider: providers::module_id_provider,
+        //    key: ModuleName,
+        //    result: ModId,
+        //},
+        //{
+        //    name: resolve_module_id,
+        //    provider: providers::resolve_module_id_provider,
+        //    key: ModId,
+        //    result: ModuleName,
+        //},
         {
             name: root_binding_env,
             provider: providers::root_binding_env_provider,
             key: (),
             result: Rc<Env<'static, String, Binding>>,
+        },
+
+        {
+            name: dependencies,
+            provider: providers::dependencies_provider,
+            key: ModId,
+            result: Res<Vec<ModId>>,
         },
     ],
     inputs: [

@@ -496,6 +496,7 @@ mod tests {
             register: &|_, _| panic!(),
             module: ModuleName::script(),
             module_stack: vec![],
+            dependencies: vec![],
             diagnostics: vec![],
         };
         let env = Env::new();

@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crate::{env::Env, expander::Binding, new_id, span::Span};
+use crate::{env::Env, expander::Binding, interner::Store, new_id, span::Span};
 
 const INDENTATION_WIDTH: usize = 2;
 
@@ -48,14 +48,16 @@ pub struct ModuleInterface {
     // TODO: bring Binding here
     /// Exported bindings.
     pub bindings: Env<'static, String, Binding>,
+    pub dependencies: Vec<ModId>,
 }
 
-new_id!(pub ModId);
+new_id!(pub ModId, ModuleName, modules);
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Module {
     pub span: Span,
     pub name: ModuleName,
+    pub dependencies: Vec<ModId>,
     /// Bindings exported from the Module.
     pub exports: Env<'static, String, Binding>,
     /// All the root bindings (e.g. macro, value) of the module.
@@ -70,6 +72,7 @@ impl Module {
             span: self.span,
             name: self.name.clone(),
             bindings: self.exports.clone(),
+            dependencies: self.dependencies.clone(),
         }
     }
 }
