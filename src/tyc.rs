@@ -1,6 +1,5 @@
 use crate::{
     diagnostics::Diagnostic,
-    query::QCtx,
     syntax::ast::{Expr, ExprKind, Module},
 };
 

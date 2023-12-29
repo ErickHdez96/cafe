@@ -1,13 +1,7 @@
 use std::path::PathBuf;
 mod repl;
 
-use cafe::{
-    config::CompilerConfig,
-    diagnostics::{emit_diagnostic, emit_diagnostics},
-    expander::core_expander_interface,
-    syntax::ast::ModuleName,
-    BuildSystem,
-};
+use cafe::{compiler::Compiler, config::CompilerConfig, diagnostics::emit_diagnostics};
 
 const HELP_MESSAGE: &str = "\
 The Cafe Compiler
@@ -18,26 +12,20 @@ Options:
 ";
 
 fn main() {
-    let qctx = BuildSystem::default();
+    let mut compiler = Compiler::default();
     let (config, input) = parse_args();
     let Some(input) = input else {
         repl::repl();
     };
 
-    qctx.feed_compiler_config(config);
-    qctx.feed_module_name((ModuleName::script(), input));
-    qctx.feed_intrinsic_lib(core_expander_interface());
+    compiler.config = config;
 
-    match qctx.expand(ModuleName::script()) {
-        Ok(res) => {
-            println!("{:#?}", res.module);
-            emit_diagnostics(&qctx, &res.diagnostics);
-            let diags = qctx.typeck(ModuleName::script());
-            emit_diagnostics(&qctx, &diags);
+    match compiler.compile_script(input) {
+        Ok(module) => {
+            println!("{:#?}", module);
+            emit_diagnostics(&compiler, &compiler.take_diagnostics());
         }
-        Err(e) => {
-            emit_diagnostic(&qctx, &e);
-        }
+        Err(_) => todo!(),
     }
 }
 

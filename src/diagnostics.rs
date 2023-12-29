@@ -2,7 +2,7 @@ use std::fmt::{self, Write};
 
 use crate::{
     atty::{Color, Style},
-    query::BuildSystem,
+    compiler::Compiler,
     span::Span,
 };
 
@@ -66,9 +66,9 @@ impl Diagnostic {
         format!("{}: {}", level(&self.level), self.message)
     }
 
-    fn complex_to_string(&self, qctx: &BuildSystem, atty: bool) -> String {
+    fn complex_to_string(&self, c: &Compiler, atty: bool) -> String {
         let level = self.level.style().atty(atty).finish();
-        let file = qctx
+        let file = c
             .file(self.span.file_id())
             .unwrap_or_else(|| panic!("invalid file id: {}", self.span.file_id().value()));
         let pos = file.position(self.span);
@@ -119,17 +119,17 @@ impl Diagnostic {
         }
 
         for d in &self.related {
-            let _ = write!(out, "\n{}", d.to_string(qctx, atty));
+            let _ = write!(out, "\n{}", d.to_string(c, atty));
         }
 
         out
     }
 
-    pub fn to_string(&self, qctx: &BuildSystem, atty: bool) -> String {
+    pub fn to_string(&self, c: &Compiler, atty: bool) -> String {
         if self.is_simple() {
             self.simple_to_string(atty)
         } else {
-            self.complex_to_string(qctx, atty)
+            self.complex_to_string(c, atty)
         }
     }
 }
@@ -220,12 +220,12 @@ impl DiagnosticBuilder {
     }
 }
 
-pub fn emit_diagnostics(qctx: &BuildSystem, diagnostics: &[Diagnostic]) {
+pub fn emit_diagnostics(c: &Compiler, diagnostics: &[Diagnostic]) {
     for d in diagnostics {
-        emit_diagnostic(qctx, d);
+        emit_diagnostic(c, d);
     }
 }
 
-pub fn emit_diagnostic(qctx: &BuildSystem, d: &Diagnostic) {
-    eprintln!("{}", d.to_string(qctx, true));
+pub fn emit_diagnostic(c: &Compiler, d: &Diagnostic) {
+    eprintln!("{}", d.to_string(c, true));
 }

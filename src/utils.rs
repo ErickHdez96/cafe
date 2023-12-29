@@ -16,10 +16,13 @@ pub trait Resolve {
 
 #[macro_export]
 macro_rules! new_id {
-    ($(#[$attr:meta])* $vis:vis $name:ident, $target:ident, $store:ident) => {
+    ($(#[$attr:meta])* $vis:vis struct $name:ident $(, $target:ident, $store:ident)?) => {
+        new_id!($(#[$attr])* $vis struct $name(u64) $(, $target, $store)?);
+    };
+    ($(#[$attr:meta])* $vis:vis struct $name:ident($ty:ty) $(, $target:ident, $store:ident)?) => {
         #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
         $(#[$attr])*
-        $vis struct $name(u64);
+        $vis struct $name($ty);
 
         impl $crate::utils::Id for $name {
             fn new() -> Self {
@@ -31,7 +34,7 @@ macro_rules! new_id {
             }
         }
 
-        impl $crate::utils::Intern for $target {
+        $(impl $crate::utils::Intern for $target {
             type Id = $name;
             fn intern(self) -> Self::Id {
                 Store::with(|s| s.$store.intern(self))
@@ -43,12 +46,12 @@ macro_rules! new_id {
             fn resolve(self) -> &'static Self::Target {
                 Store::with(|s| s.$store.resolve(self))
             }
-        }
+        })?
 
         impl $name {
             thread_local! {
                 #[allow(non_upper_case_globals)]
-                static $name: std::cell::Cell<u64> = std::cell::Cell::new(0);
+                static $name: std::cell::Cell<$ty> = std::cell::Cell::new(0);
             }
         }
     };

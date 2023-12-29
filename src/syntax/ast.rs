@@ -67,7 +67,7 @@ pub struct ModuleInterface {
     pub dependencies: Vec<ModId>,
 }
 
-new_id!(pub ModId, ModuleName, modules);
+new_id!(pub struct ModId(u32), ModuleName, modules);
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Module {
@@ -162,6 +162,21 @@ impl fmt::Debug for Path {
     }
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub enum NameId {
+    Global(DefId),
+    Local(ItemId),
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub struct ItemId {
+    owner: LocalDefId,
+    id: LocalItemId,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub struct LocalItemId(u32);
+
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Item {
     Define(Define),
@@ -192,6 +207,15 @@ impl fmt::Debug for Item {
         }
     }
 }
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub struct DefId {
+    mod_id: ModId,
+    local_def_id: LocalDefId,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub struct LocalDefId(u32);
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Define {
