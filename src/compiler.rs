@@ -11,6 +11,8 @@ use crate::{
         cst::SynRoot,
         parser::{parse_source_file, ParseResult},
     },
+    ty::{BuiltinTys, Ty},
+    tyc::typecheck_module,
 };
 
 pub type Res<T> = Result<T, Diagnostic>;
@@ -63,11 +65,20 @@ impl Compiler {
         }
     }
 
+    fn module_deps(&self, mid: ModId) -> Vec<ModId> {
+        self.store
+            .borrow()
+            .get_mod_interface(mid)
+            .map(|i| i.dependencies.clone())
+            .unwrap()
+    }
+
     pub fn file(&self, file_id: FileId) -> Option<Rc<SourceFile>> {
         self.store.borrow().get_file(file_id)
     }
 
-    pub fn feed_file(&self, path: &path::Path) -> Res<FileId> {
+    pub fn feed_file(&self, mid: ModId, path: impl AsRef<path::Path>) -> Res<FileId> {
+        let path = path.as_ref();
         let contents = match std::fs::read_to_string(path) {
             Ok(c) => c,
             Err(e) => {
@@ -76,13 +87,20 @@ impl Compiler {
                     .finish());
             }
         };
+        self.feed_file_contents(mid, path, contents)
+    }
 
-        let source_file = SourceFile::new(path, contents);
+    pub fn feed_file_contents(
+        &self,
+        mid: ModId,
+        path: impl AsRef<path::Path>,
+        contents: impl Into<String>,
+    ) -> Res<FileId> {
+        let source_file = SourceFile::new(path.as_ref(), contents.into());
         let fid = source_file.id;
-        self.store
-            .borrow_mut()
-            .filemap
-            .insert(source_file.id, Rc::new(source_file));
+        let mut store = self.store.borrow_mut();
+        store.filemap.insert(source_file.id, Rc::new(source_file));
+        store.module_file.insert(mid, fid);
         Ok(fid)
     }
 
@@ -113,6 +131,19 @@ impl Compiler {
         )
     }
 
+    pub fn pass_typecheck(&self, mod_: &Module) -> Env<'static, String, Rc<Ty>> {
+        let (res, diags) = typecheck_module(mod_, self.store.borrow().builtin_tys.clone(), |mid| {
+            self.store
+                .borrow()
+                .module_interfaces
+                .get(&mid)
+                .map(Rc::clone)
+                .unwrap()
+        });
+        self.diagnostics.borrow_mut().extend(diags);
+        res
+    }
+
     pub fn expand_module(&self, mid: ModId) -> Res<Rc<Module>> {
         let fid = self.resolve_module_name(mid)?;
         let pres = self.pass_parse(fid);
@@ -130,12 +161,45 @@ impl Compiler {
         Ok(self.store.borrow().get_mod(mid).unwrap())
     }
 
+    pub fn typecheck_module(&self, mid: ModId) -> Res<Rc<Module>> {
+        let env = {
+            let module = self.expand_module(mid)?;
+            self.pass_typecheck(&module)
+        };
+        Rc::get_mut(
+            self.store
+                .borrow_mut()
+                .module_interfaces
+                .get_mut(&mid)
+                .unwrap(),
+        )
+        .unwrap()
+        .types = Some(env.clone());
+        Rc::get_mut(self.store.borrow_mut().modules.get_mut(&mid).unwrap())
+            .unwrap()
+            .types = Some(env);
+        Ok(self.store.borrow().get_mod(mid).unwrap())
+    }
+
     pub fn compile_script(&self, path: impl AsRef<path::Path>) -> Res<Rc<Module>> {
         let mid = ModuleName::script();
-        let fid = self.feed_file(path.as_ref())?;
-        self.store.borrow_mut().module_file.insert(mid, fid);
+        self.feed_file(mid, path.as_ref())?;
+        let m = self.expand_module(mid);
 
-        self.expand_module(mid)
+        for dep in self.module_deps(mid) {
+            let env = self.pass_typecheck(&self.store.borrow().get_mod(dep).unwrap());
+            Rc::get_mut(
+                self.store
+                    .borrow_mut()
+                    .module_interfaces
+                    .get_mut(&dep)
+                    .unwrap(),
+            )
+            .unwrap()
+            .types = Some(env);
+        }
+
+        m
     }
 }
 
@@ -145,6 +209,7 @@ struct Store {
     module_file: HashMap<ModId, FileId>,
     modules: HashMap<ModId, Rc<Module>>,
     module_interfaces: HashMap<ModId, Rc<ModuleInterface>>,
+    builtin_tys: BuiltinTys,
 }
 
 impl Store {

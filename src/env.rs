@@ -1,6 +1,9 @@
 use std::{
     borrow::Borrow,
-    collections::{hash_map, HashMap},
+    collections::{
+        hash_map::{self, Iter},
+        HashMap,
+    },
     hash::Hash,
     ops,
     rc::Rc,
@@ -83,6 +86,11 @@ impl<K, V> Env<'static, K, V> {
             parent: Some(Parent::Rc(rc)),
             ..Default::default()
         }
+    }
+
+    #[must_use]
+    pub fn iter(&self) -> Iter<'_, K, V> {
+        self.bindings.iter()
     }
 }
 

@@ -125,6 +125,7 @@ pub fn module(expander: &mut Expander, syn: SynList) {
             exports: exported_bindings,
             bindings: Env::with_bindings(bindings.into_bindings()),
             body: items_to_letrec(items, syn_span),
+            types: None,
         },
     );
     expander.exit_module();

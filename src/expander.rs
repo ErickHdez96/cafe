@@ -81,6 +81,7 @@ pub fn core_expander_interface() -> ModuleInterface {
         span: Span::dummy(),
         bindings: core,
         dependencies: vec![],
+        types: None,
     }
 }
 
@@ -253,6 +254,7 @@ pub fn expand_root(
                     }],
                 },
             },
+            types: None,
         },
     );
 
@@ -313,6 +315,7 @@ impl Expander<'_> {
                 bindings: Env::with_bindings(bindings.into_bindings()),
                 dependencies: std::mem::take(&mut self.dependencies),
                 body: items_to_letrec(items, syn.span()),
+                types: None,
             },
             diagnostics: std::mem::take(&mut self.diagnostics),
         }
@@ -958,6 +961,7 @@ mod tests {
                                 }],
                             },
                         },
+                        types: None,
                     },
                 )])),
             }

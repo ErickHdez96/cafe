@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{fmt, rc::Rc};
 
 use crate::{
     env::Env,
@@ -6,6 +6,7 @@ use crate::{
     interner::Store,
     new_id,
     span::Span,
+    ty::Ty,
     utils::{Intern, Resolve},
 };
 
@@ -64,6 +65,7 @@ pub struct ModuleInterface {
     // TODO: bring Binding here
     /// Exported bindings.
     pub bindings: Env<'static, String, Binding>,
+    pub types: Option<Env<'static, String, Rc<Ty>>>,
     pub dependencies: Vec<ModId>,
 }
 
@@ -78,6 +80,7 @@ pub struct Module {
     pub exports: Env<'static, String, Binding>,
     /// All the root bindings (e.g. macro, value) of the module.
     pub bindings: Env<'static, String, Binding>,
+    pub types: Option<Env<'static, String, Rc<Ty>>>,
     pub body: Expr,
 }
 
@@ -89,6 +92,7 @@ impl Module {
             id: self.id,
             bindings: self.exports.clone(),
             dependencies: self.dependencies.clone(),
+            types: None,
         }
     }
 }
