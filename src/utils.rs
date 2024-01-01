@@ -34,6 +34,12 @@ macro_rules! new_id {
             }
         }
 
+        impl std::fmt::Display for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "{}", self.0)
+            }
+        }
+
         $(impl $crate::utils::Intern for $target {
             type Id = $name;
             fn intern(self) -> Self::Id {

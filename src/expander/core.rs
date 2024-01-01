@@ -177,7 +177,13 @@ pub fn lambda_transformer(
         kind: ast::ExprKind::Lambda {
             formals,
             rest,
-            exprs: body,
+            expr: Box::new(ast::Expr {
+                span: syn.source_span(),
+                kind: ast::ExprKind::LetRec {
+                    defs: vec![], // TODO
+                    exprs: body,
+                },
+            }),
         },
     }
 }

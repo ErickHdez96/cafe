@@ -59,7 +59,7 @@ where
 
 impl<K, V> PartialEq for Env<'_, K, V>
 where
-    K: Hash + Eq,
+    K: Eq + Hash,
     V: PartialEq,
 {
     fn eq(&self, other: &Self) -> bool {
@@ -69,6 +69,23 @@ where
                 .bindings
                 .iter()
                 .all(|(k, v)| other.bindings.get(k) == Some(v))
+    }
+}
+
+impl<K, V> FromIterator<(K, V)> for Env<'_, K, V>
+where
+    K: Eq + Hash,
+{
+    fn from_iter<T: IntoIterator<Item = (K, V)>>(iter: T) -> Self {
+        let mut bindings = HashMap::default();
+        for (k, v) in iter {
+            bindings.insert(k, v);
+        }
+
+        Self {
+            bindings,
+            ..Default::default()
+        }
     }
 }
 

@@ -272,7 +272,7 @@ pub enum ExprKind {
     Lambda {
         formals: Vec<Ident>,
         rest: Option<Ident>,
-        exprs: Vec<Expr>,
+        expr: Box<Expr>,
     },
     List(Vec<Expr>),
     DottedList(Vec<Expr>, Box<Expr>),
@@ -364,10 +364,10 @@ impl fmt::Debug for Expr {
                 ExprKind::Lambda {
                     formals,
                     rest,
-                    exprs,
+                    expr,
                 } => write!(
                     f,
-                    "{indentation}{{λ {}\n{}({})\n{}{}\n{}}}",
+                    "{indentation}{{λ {}\n{}({})\n{}{}\n{expr:#width$?}}}",
                     self.span,
                     " ".repeat(width + INDENTATION_WIDTH),
                     formals
@@ -380,11 +380,11 @@ impl fmt::Debug for Expr {
                         Some(rest) => format!("{rest:#?}"),
                         None => String::from("#f"),
                     },
-                    exprs
-                        .iter()
-                        .map(|e| format!("{e:#width$?}", width = width + INDENTATION_WIDTH))
-                        .collect::<Vec<_>>()
-                        .join("\n"),
+                    width = width + INDENTATION_WIDTH //exprs
+                                                      //.iter()
+                                                      //.map(|e| format!("{e:#width$?}", width = width + INDENTATION_WIDTH))
+                                                      //.collect::<Vec<_>>()
+                                                      //.join("\n"),
                 ),
                 ExprKind::Error(e) => {
                     write!(
