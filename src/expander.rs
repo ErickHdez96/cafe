@@ -4,12 +4,10 @@ use crate::{
     diagnostics::{Diagnostic, DiagnosticBuilder},
     env::Env,
     expander::scopes::{Scope, Scopes},
-    file::FileId,
     span::Span,
     syntax::{
         ast::{self, ModId, Module, ModuleInterface, ModuleName},
-        cst::{GreenTree, RedTree, SynExp, SynList, SynRoot, SynSymbol},
-        SyntaxKind,
+        cst::{SynExp, SynList, SynRoot, SynSymbol},
     },
 };
 
@@ -516,7 +514,7 @@ impl Expander<'_> {
                             },
                         }
                     }
-                    r => todo!("{r:?}"),
+                    r => todo!("{} - {r:?}", syn.red()),
                 },
                 SynExp::Boolean(_) | SynExp::Char(_) => {
                     self.emit_error(|b| {
@@ -683,241 +681,6 @@ fn items_to_letrec(mut items: Vec<Item>, span: Span) -> ast::Expr {
     }
 }
 
-fn green_list(children: Vec<Rc<GreenTree>>) -> Rc<GreenTree> {
-    let mut out = vec![green_open()];
-    let len = children.len();
-    for (i, c) in children.into_iter().enumerate() {
-        out.push(c);
-        if i + 1 < len {
-            out.push(green_space());
-        }
-    }
-    out.push(green_close());
-    Rc::new(GreenTree::node(SyntaxKind::List, out))
-}
-
-fn green_atom(atom: Rc<GreenTree>) -> Rc<GreenTree> {
-    Rc::new(GreenTree::node(SyntaxKind::Atom, vec![atom]))
-}
-
-fn green_open() -> Rc<GreenTree> {
-    Rc::new(GreenTree::token(SyntaxKind::OpenDelim, "(".into()))
-}
-
-fn green_close() -> Rc<GreenTree> {
-    Rc::new(GreenTree::token(SyntaxKind::OpenDelim, ")".into()))
-}
-
-fn green_ident(id: impl Into<String>) -> Rc<GreenTree> {
-    green_atom(Rc::new(GreenTree::token(SyntaxKind::Identifier, id.into())))
-}
-
-fn first_child(green: &Rc<GreenTree>) -> Rc<GreenTree> {
-    match &green.as_ref() {
-        GreenTree::Node(n) => Rc::clone(n.children().first().expect("expected a child")),
-        GreenTree::Token(_) => panic!("expected node"),
-    }
-}
-
-fn green_space() -> Rc<GreenTree> {
-    Rc::new(GreenTree::token(SyntaxKind::Whitespace, " ".into()))
-}
-
-fn green_true() -> Rc<GreenTree> {
-    green_atom(Rc::new(GreenTree::token(
-        SyntaxKind::True,
-        "#t".to_string(),
-    )))
-}
-
-#[allow(dead_code)]
-fn let_transformer(syn: SynList) -> Result<SynExp, Vec<Diagnostic>> {
-    let sexps_len = syn.sexps().len();
-    let (sexps, _) = syn.into_parts();
-    let mut l = sexps.into_iter();
-    assert!(l.next().is_some());
-    let binssyn = l.next().and_then(|s| s.into_list().ok()).ok_or_else(|| {
-        vec![Diagnostic::builder()
-            .msg("expected a list of bindings")
-            .finish()]
-    })?;
-    let (sexps, _) = binssyn.into_parts();
-    let bindings = sexps
-        .into_iter()
-        .map(|s| {
-            s.into_list()
-                .map(|l| {
-                    let mut ls = l.into_parts().0.into_iter();
-                    let b = (
-                        ls.next().unwrap().into_symbol().unwrap(),
-                        ls.next().unwrap(),
-                    );
-                    assert!(ls.next().is_none());
-                    b
-                })
-                .map_err(|_| {
-                    vec![Diagnostic::builder()
-                        .msg("expected a list of variable expression")
-                        .finish()]
-                })
-        })
-        .collect::<Result<Vec<_>, Vec<_>>>()?;
-    assert!(sexps_len >= 3);
-
-    let λ = green_ident("lambda");
-    let bindings_syn = green_list(
-        bindings
-            .iter()
-            .map(|(b, _)| b.red().green().clone())
-            .collect(),
-    );
-    let mut lambda_out_syn = vec![
-        SynSymbol::raw(
-            &RedTree::new(&first_child(&λ)),
-            Scopes::core(),
-            FileId::default(),
-            None,
-        )
-        .into(),
-        SynList::raw(
-            &RedTree::new(&bindings_syn),
-            bindings.iter().map(|(b, _)| (*b).clone().into()).collect(),
-            None,
-            FileId::default(),
-            None,
-        )
-        .into(),
-    ];
-    let mut lambda_out = vec![λ.clone(), bindings_syn.clone()];
-
-    for s in l {
-        lambda_out.push(s.red().green().clone());
-        lambda_out_syn.push(s.clone());
-    }
-
-    let lambda_out = green_list(lambda_out);
-    let mut app_out_syn = vec![SynList::raw(
-        &RedTree::new(&lambda_out),
-        lambda_out_syn,
-        None,
-        FileId::default(),
-        None,
-    )
-    .into()];
-    let mut app_out = vec![lambda_out.clone()];
-    for (_, e) in &bindings {
-        app_out.push(e.red().green().clone());
-        app_out_syn.push((*e).clone());
-    }
-
-    Ok(SynList::raw(
-        &RedTree::new(&green_list(app_out)),
-        app_out_syn,
-        None,
-        FileId::default(),
-        None,
-    )
-    .into())
-}
-
-#[allow(dead_code)]
-fn or_transformer(syn: SynList) -> Result<SynExp, Vec<Diagnostic>> {
-    let sexps_len = syn.sexps().len();
-    let mut sexps = syn.sexps().iter();
-    assert!(sexps.next().is_some());
-    match sexps.next() {
-        None => Ok(SynExp::cast(&RedTree::new(&green_true()), FileId::default()).unwrap()),
-        Some(e) if sexps_len == 2 => Ok(e.clone()),
-        Some(e) => {
-            let let_ = green_ident("let");
-            let let_syn = SynSymbol::raw(
-                &RedTree::new(&first_child(&let_)),
-                Scopes::core(),
-                FileId::default(),
-                None,
-            )
-            .into();
-            let x = green_ident("x");
-            let x_syn: SynExp = SynSymbol::raw(
-                &RedTree::new(&first_child(&x)),
-                Scopes::core(),
-                FileId::default(),
-                None,
-            )
-            .into();
-            let if_ = green_ident("if");
-            let if_syn = SynSymbol::raw(
-                &RedTree::new(&first_child(&if_)),
-                Scopes::core(),
-                FileId::default(),
-                None,
-            )
-            .into();
-            let or = green_ident("or");
-            let or_syn = SynSymbol::raw(
-                &RedTree::new(&first_child(&or)),
-                Scopes::core(),
-                FileId::default(),
-                None,
-            )
-            .into();
-            let binding = green_list(vec![x.clone(), e.red().green().clone()]);
-            let bindings = green_list(vec![binding.clone()]);
-            let bindings_syn = SynList::raw(
-                &RedTree::new(&bindings),
-                vec![SynList::raw(
-                    &RedTree::new(&binding),
-                    vec![x_syn.clone(), e.clone()],
-                    None,
-                    FileId::default(),
-                    None,
-                )
-                .into()],
-                None,
-                FileId::default(),
-                None,
-            )
-            .into();
-
-            let mut or_l = vec![or];
-            let mut or_syn = vec![or_syn];
-
-            for rest in sexps {
-                or_l.push(rest.red().green().clone());
-                or_syn.push(rest.clone());
-            }
-
-            let or_l = green_list(or_l);
-            let if_l = green_list(vec![if_, x.clone(), x, or_l.clone()]);
-            let if_syn = SynList::raw(
-                &RedTree::new(&if_l),
-                vec![
-                    if_syn,
-                    x_syn.clone(),
-                    x_syn,
-                    SynList::raw(&RedTree::new(&or_l), or_syn, None, FileId::default(), None)
-                        .into(),
-                ],
-                None,
-                FileId::default(),
-                None,
-            )
-            .into();
-            let out = vec![let_, bindings, if_l];
-            let out_syn = vec![let_syn, bindings_syn, if_syn];
-
-            Ok(SynList::raw(
-                &RedTree::new(&green_list(out)),
-                out_syn,
-                None,
-                FileId::default(),
-                None,
-            )
-            .into())
-        }
-    }
-}
-
 thread_local! {
     static IDENTIFIER_ID: Cell<u64> = Cell::new(1);
 }
@@ -1038,33 +801,12 @@ mod tests {
         core
     }
 
-    fn root_env() -> Env<'static, String, Binding> {
-        let mut root = core_env().enter_consume();
-        root.insert(
-            String::from("let"),
-            Binding::SyntaxTransformer {
-                scopes: Scopes::core(),
-                name: String::from("let"),
-                transformer: let_transformer,
-            },
-        );
-        root.insert(
-            String::from("or"),
-            Binding::SyntaxTransformer {
-                scopes: Scopes::core(),
-                name: String::from("or"),
-                transformer: or_transformer,
-            },
-        );
-        root.enter_consume()
-    }
-
     fn check(input: &str, expected: Expect) {
         let res = parse_str(input);
         assert_eq!(res.diagnostics, vec![]);
         let red = SynRoot::new(&res.tree, res.file_id);
         let mut children = red.syn_children();
-        let env = root_env();
+        let env = core_env();
         let mut expander = Expander {
             import: &|_| panic!(),
             register: &|_, _| panic!(),
@@ -1357,128 +1099,6 @@ mod tests {
                   {#t 0:7..2}}
             "#]],
         );
-    }
-
-    #[test]
-    fn expand_let() {
-        check(
-            "(let ([x #t]) x)",
-            expect![[r#"
-                {list 0:0..19
-                  {λ 0:0..14
-                    ({|x 1| 0:7..1})
-                    #f
-                    {letrec 0:0..14
-                      ()
-                      {var |x 1| (#script ()) 0:14..1}}}
-                  {#t 0:9..2}}
-            "#]],
-        );
-    }
-
-    #[test]
-    fn expand_or() {
-        check(
-            "(or)",
-            expect![[r#"
-                {#t 0:0..2}
-            "#]],
-        );
-        check(
-            "(or #f)",
-            expect![[r#"
-                {#f 0:4..2}
-            "#]],
-        );
-        check(
-            r"(or #\a #\b)",
-            expect![[r#"
-                {list 0:0..36
-                  {λ 0:0..30
-                    ({|x 1| 0:0..1})
-                    #f
-                    {letrec 0:0..30
-                      ()
-                      {if 0:0..17
-                        {var |x 1| (#script ()) 0:0..1}
-                        {var |x 1| (#script ()) 0:0..1}
-                        {#\b 0:8..3}}}}
-                  {#\a 0:4..3}}
-            "#]],
-        );
-        check(
-            r"(lambda (x y) (or y x))",
-            expect![[r#"
-                {λ 0:0..23
-                  ({|x 2| 0:9..1} {|y 3| 0:11..1})
-                  #f
-                  {letrec 0:0..23
-                    ()
-                    {list 0:0..32
-                      {λ 0:0..28
-                        ({|x 4| 0:0..1})
-                        #f
-                        {letrec 0:0..28
-                          ()
-                          {if 0:0..15
-                            {var |x 4| (#script ()) 0:0..1}
-                            {var |x 4| (#script ()) 0:0..1}
-                            {var |x 2| (#script ()) 0:20..1}}}}
-                      {var |y 3| (#script ()) 0:18..1}}}}
-            "#]],
-        );
-    }
-
-    #[test]
-    fn let_x() {
-        let res = parse_str("(let ([x #t]) x)");
-        assert_eq!(res.diagnostics, vec![]);
-        let red = RedTree::new(&res.tree);
-        let root = SynRoot::new_red(&red, res.file_id);
-        let children = root.children();
-        let or = SynExp::cast(&children[0], res.file_id).unwrap();
-        let out = let_transformer(or.into_list().unwrap()).unwrap();
-        assert_eq!(out.to_string(), "((lambda (x) x) #t)");
-        assert_eq!(out.into_list().unwrap().syn_string(), "((lambda (x) x) #t)");
-    }
-
-    #[test]
-    fn or() {
-        let res = parse_str("(or)");
-        assert_eq!(res.diagnostics, vec![]);
-        let red = RedTree::new(&res.tree);
-        let root = SynRoot::new_red(&red, res.file_id);
-        let children = root.children();
-        let or = SynExp::cast(&children[0], res.file_id).unwrap();
-        let out = or_transformer(or.into_list().unwrap()).unwrap();
-        assert_eq!(out.to_string(), "#t");
-        assert_eq!(out.syn_string(), "#t");
-    }
-
-    #[test]
-    fn or_e() {
-        let res = parse_str("(or #f)");
-        assert_eq!(res.diagnostics, vec![]);
-        let red = RedTree::new(&res.tree);
-        let root = SynRoot::new_red(&red, res.file_id);
-        let children = root.children();
-        let or = SynExp::cast(&children[0], res.file_id).unwrap();
-        let out = or_transformer(or.into_list().unwrap()).unwrap();
-        assert_eq!(out.to_string(), "#f");
-        assert_eq!(out.syn_string(), "#f");
-    }
-
-    #[test]
-    fn or_e0_e() {
-        let res = parse_str(r"(or #\0 #\1)");
-        assert_eq!(res.diagnostics, vec![]);
-        let red = RedTree::new(&res.tree);
-        let root = SynRoot::new_red(&red, res.file_id);
-        let children = root.children();
-        let or = SynExp::cast(&children[0], res.file_id).unwrap();
-        let out = or_transformer(or.into_list().unwrap()).unwrap();
-        assert_eq!(out.to_string(), r"(let ((x #\0)) (if x x (or #\1)))");
-        assert_eq!(out.syn_string(), r"(let ((x #\0)) (if x x (or #\1)))");
     }
 
     mod modules {
