@@ -380,11 +380,7 @@ impl fmt::Debug for Expr {
                         Some(rest) => format!("{rest:#?}"),
                         None => String::from("#f"),
                     },
-                    width = width + INDENTATION_WIDTH //exprs
-                                                      //.iter()
-                                                      //.map(|e| format!("{e:#width$?}", width = width + INDENTATION_WIDTH))
-                                                      //.collect::<Vec<_>>()
-                                                      //.join("\n"),
+                    width = width + INDENTATION_WIDTH
                 ),
                 ExprKind::Error(e) => {
                     write!(

@@ -178,7 +178,7 @@ pub fn import(expander: &mut Expander, syn: SynList, env: &mut Env<String, Bindi
     }
 }
 
-fn parse_module_name(expander: &mut Expander, syn: SynExp) -> Option<ModId> {
+pub fn parse_module_name(expander: &mut Expander, syn: SynExp) -> Option<ModId> {
     let span = syn.source_span();
     match syn {
         SynExp::List(l) => {

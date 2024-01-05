@@ -1,15 +1,22 @@
 use std::rc::Rc;
 
 use crate::{
+    diagnostics::Diagnostic,
     env::Env,
+    file::FileId,
     span::Span,
     syntax::{
         ast,
-        cst::{RedTree, SynExp, SynList, SynSymbol},
+        cst::{GreenTree, RedTree, SynExp, SynList, SynSymbol},
+        SyntaxKind,
     },
 };
 
-use super::{macros::compile_transformer, scopes::Scope, Binding, Expander};
+use super::{
+    macros::compile_transformer,
+    scopes::{Scope, Scopes},
+    Binding, Expander,
+};
 
 pub fn if_transformer(
     expander: &mut Expander,
@@ -451,4 +458,190 @@ fn quote_missing_expr(expander: &mut Expander, red: &Rc<RedTree>, span: Span) ->
         kind: ast::ExprKind::Void,
     }
     .into_error()
+}
+
+pub fn library_transformer(syn: SynList) -> Result<SynExp, Vec<Diagnostic>> {
+    let mut diags = vec![];
+    let file_id = syn.file_id();
+    let close_delim_char = syn.expected_close_char();
+    let close_delim_span = syn.close_delim_span();
+    let (sexps, _) = syn.into_parts();
+    let mut children = sexps.into_iter();
+    children.next();
+
+    let mname = if let Some(sexp) = children.next() {
+        sexp
+    } else {
+        diags.push(
+            Diagnostic::builder()
+                .msg(format!(
+                    "expected a module name, found `{close_delim_char}`"
+                ))
+                .show_after()
+                .span(close_delim_span)
+                .finish(),
+        );
+        return Err(diags);
+    };
+    let exports = match children.next() {
+        Some(syn) => match library_export(&mut diags, syn) {
+            Some(syn) => syn,
+            None => return Err(diags),
+        },
+        None => {
+            diags.push(
+                Diagnostic::builder()
+                    .msg(format!(
+                        "expected list of exported identifiers, found `{close_delim_char}`"
+                    ))
+                    .show_after()
+                    .span(close_delim_span)
+                    .finish(),
+            );
+            return Err(diags);
+        }
+    };
+
+    // Intern token
+    let module_ident_green = Rc::new(GreenTree::token(
+        SyntaxKind::Identifier,
+        String::from("module"),
+    ));
+    let module_ident_green_syn = SynExp::Symbol(SynSymbol::raw(
+        &RedTree::new(&module_ident_green),
+        Scopes::core(),
+        file_id,
+        None,
+    ));
+    let ws = Rc::new(GreenTree::token(SyntaxKind::Whitespace, String::from(" ")));
+    let lopen = Rc::new(GreenTree::token(SyntaxKind::OpenDelim, String::from("(")));
+    let lclose = Rc::new(GreenTree::token(SyntaxKind::CloseDelim, String::from(")")));
+    let mut elist = vec![Rc::clone(&lopen)];
+    for (i, e) in exports.iter().enumerate() {
+        elist.push(Rc::clone(e.red().green()));
+        if i + 1 < exports.len() {
+            elist.push(Rc::clone(&ws));
+        }
+    }
+    elist.push(Rc::clone(&lclose));
+    let export_list = Rc::new(GreenTree::node(SyntaxKind::List, elist));
+    let mut mlist = vec![lopen, module_ident_green, Rc::clone(&ws)];
+    mlist.push(Rc::clone(mname.red().green()));
+    mlist.push(Rc::clone(&ws));
+    mlist.push(Rc::clone(&export_list));
+    mlist.push(Rc::clone(&ws));
+
+    let mut sexps = vec![
+        module_ident_green_syn,
+        mname,
+        SynExp::List(SynList::raw(
+            &RedTree::new(&export_list),
+            exports,
+            None,
+            file_id,
+            None,
+        )),
+    ];
+    for c in children {
+        mlist.push(Rc::clone(c.red().green()));
+        mlist.push(Rc::clone(&ws));
+        sexps.push(c);
+    }
+
+    mlist.push(lclose);
+    let module_green = Rc::new(GreenTree::node(SyntaxKind::List, mlist));
+
+    if diags.is_empty() {
+        let syn = SynExp::List(SynList::raw(
+            &RedTree::new(&module_green),
+            sexps,
+            None,
+            FileId::default(),
+            None,
+        ));
+        eprintln!("{syn}");
+        Ok(syn)
+    } else {
+        Err(diags)
+    }
+}
+
+fn library_export(diags: &mut Vec<Diagnostic>, syn: SynExp) -> Option<Vec<SynExp>> {
+    let syn = match syn.into_list() {
+        Ok(l) => l,
+        Err(syn) => {
+            diags.push(
+                Diagnostic::builder()
+                    .msg(format!(
+                        "expected list of exported identifiers, found {}",
+                        syn
+                    ))
+                    .span(syn.source_span())
+                    .finish(),
+            );
+            return None;
+        }
+    };
+
+    let close_delim_char = syn.expected_close_char();
+    let close_delim_span = syn.close_delim_span();
+    let (sexps, _) = syn.into_parts();
+    let mut children = sexps.into_iter().peekable();
+
+    match children.peek() {
+        Some(SynExp::Symbol(s)) if s.value() == "export" => {
+            children.next();
+        }
+        Some(syn) => {
+            diags.push(
+                Diagnostic::builder()
+                    .msg(format!("expected `export`, found {syn}"))
+                    .span(syn.source_span())
+                    .finish(),
+            );
+        }
+        None => {
+            diags.push(
+                Diagnostic::builder()
+                    .msg(format!("expected `export`, found {close_delim_char}"))
+                    .span(close_delim_span)
+                    .finish(),
+            );
+            return None;
+        }
+    }
+
+    Some(children.collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::tests::modules::check;
+
+    mod library {
+        use expect_test::expect;
+
+        use super::*;
+
+        #[test]
+        fn simple() {
+            check(
+                "(library
+                   (my-lib)
+                   (export id)
+                   (import (rnrs expander core))
+                   (define id (lambda (x) x)))
+                 (import (my-lib))
+                 (id #t)",
+                expect![[r#"
+                    mod (#script ()) @0:0..223
+                      {letrec 0:0..223
+                        ()
+                        {list 0:216..7
+                          {var |id| (my-lib ()) 0:217..2}
+                          {#t 0:220..2}}}
+                "#]],
+            );
+        }
+    }
 }

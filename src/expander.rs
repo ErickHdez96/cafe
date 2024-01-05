@@ -273,6 +273,14 @@ fn intrinsics_env() -> Env<'static, String, Binding> {
             scopes: Scopes::core(),
         },
     );
+    env.insert(
+        String::from("library"),
+        Binding::SyntaxTransformer {
+            scopes: Scopes::core(),
+            name: String::from("library"),
+            transformer: core::library_transformer,
+        },
+    );
     env
 }
 
@@ -326,6 +334,13 @@ impl Expander<'_> {
 
         if let Some(SynExp::Symbol(s)) = l.sexps().first() {
             match resolve(s, env) {
+                Some(Binding::SyntaxTransformer { transformer, .. }) => match transformer(l) {
+                    Ok(syn) => return self.expand_macro(syn, env),
+                    Err(diags) => {
+                        self.diagnostics.extend(diags);
+                        return None;
+                    }
+                },
                 Some(Binding::NativeSyntaxTransformer { transformer, .. }) => {
                     let s = transformer.expand(self, l, env)?;
                     return self.expand_macro(s, env);
@@ -801,12 +816,12 @@ mod tests {
         core
     }
 
-    fn check(input: &str, expected: Expect) {
+    pub fn check(input: &str, expected: Expect) {
         let res = parse_str(input);
         assert_eq!(res.diagnostics, vec![]);
         let red = SynRoot::new(&res.tree, res.file_id);
         let mut children = red.syn_children();
-        let env = core_env();
+        let env = core_env().enter_consume();
         let mut expander = Expander {
             import: &|_| panic!(),
             register: &|_, _| panic!(),
@@ -1101,12 +1116,12 @@ mod tests {
         );
     }
 
-    mod modules {
+    pub mod modules {
         use crate::utils::Resolve;
 
         use super::*;
 
-        fn check(input: &str, expected: Expect) -> ExpanderResult {
+        pub fn check(input: &str, expected: Expect) -> ExpanderResult {
             let res = parse_str(input);
             assert_eq!(res.diagnostics, vec![]);
             let syn = SynRoot::new(&res.tree, res.file_id);
