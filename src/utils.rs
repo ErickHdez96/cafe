@@ -1,5 +1,7 @@
 use std::hash::Hash;
 
+pub type Atom = String;
+
 pub trait Id: PartialEq + Eq + Copy + Hash {
     fn new() -> Self;
 }
@@ -43,14 +45,14 @@ macro_rules! new_id {
         $(impl $crate::utils::Intern for $target {
             type Id = $name;
             fn intern(self) -> Self::Id {
-                Store::with(|s| s.$store.intern(self))
+                $crate::interner::Store::with(|s| s.$store.intern(self))
             }
         }
 
         impl $crate::utils::Resolve for $name {
             type Target = $target;
             fn resolve(self) -> &'static Self::Target {
-                Store::with(|s| s.$store.resolve(self))
+                $crate::interner::Store::with(|s| s.$store.resolve(self))
             }
         })?
 

@@ -2,7 +2,7 @@ use std::{fmt, rc::Rc};
 
 use crate::{
     env::Env,
-    expander::Binding,
+    new_expander::Binding,
     new_id,
     span::Span,
     ty::Ty,
@@ -10,6 +10,47 @@ use crate::{
 };
 
 const INDENTATION_WIDTH: usize = 2;
+
+new_id!(pub struct ModId(u32), ModuleName, modules);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Module {
+    pub id: ModId,
+    pub span: Span,
+    pub dependencies: Vec<ModId>,
+    /// Bindings exported from the Module.
+    pub exports: Env<'static, String, Binding>,
+    /// All the root bindings (e.g. macro, value) of the module.
+    pub bindings: Env<'static, String, Binding>,
+    pub types: Option<Env<'static, String, Rc<Ty>>>,
+    pub body: Expr,
+}
+
+impl Module {
+    /// Returns the interface defining the module.
+    pub fn to_interface(&self) -> ModuleInterface {
+        ModuleInterface {
+            span: self.span,
+            id: self.id,
+            bindings: self.exports.clone(),
+            dependencies: self.dependencies.clone(),
+            types: None,
+        }
+    }
+}
+
+/// A [`ModuleInterface`] is the outer view of a [`Module`] as seen from another [`Module`]. It
+/// contains its location, name and its list of exported bindings.
+#[derive(Debug, Clone, Hash)]
+pub struct ModuleInterface {
+    pub id: ModId,
+    pub span: Span,
+    // TODO: bring Binding here
+    /// Exported bindings.
+    pub bindings: Env<'static, String, Binding>,
+    pub types: Option<Env<'static, String, Rc<Ty>>>,
+    pub dependencies: Vec<ModId>,
+}
 
 /// A [`ModuleName`] comprises of its individual path components (e.g. rnrs io simple) which must be
 /// valid identifiers, and its optional version (e.g. 1 0 1).
@@ -52,69 +93,6 @@ impl fmt::Display for ModuleName {
                 .collect::<Vec<_>>()
                 .join(" ")
         )
-    }
-}
-
-/// A [`ModuleInterface`] is the outer view of a [`Module`] as seen from another [`Module`]. It
-/// contains its location, name and its list of exported bindings.
-#[derive(Debug, Clone, Hash)]
-pub struct ModuleInterface {
-    pub id: ModId,
-    pub span: Span,
-    // TODO: bring Binding here
-    /// Exported bindings.
-    pub bindings: Env<'static, String, Binding>,
-    pub types: Option<Env<'static, String, Rc<Ty>>>,
-    pub dependencies: Vec<ModId>,
-}
-
-new_id!(pub struct ModId(u32), ModuleName, modules);
-
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub struct Module {
-    pub id: ModId,
-    pub span: Span,
-    pub dependencies: Vec<ModId>,
-    /// Bindings exported from the Module.
-    pub exports: Env<'static, String, Binding>,
-    /// All the root bindings (e.g. macro, value) of the module.
-    pub bindings: Env<'static, String, Binding>,
-    pub types: Option<Env<'static, String, Rc<Ty>>>,
-    pub body: Expr,
-}
-
-impl Module {
-    /// Returns the interface defining the module.
-    pub fn to_interface(&self) -> ModuleInterface {
-        ModuleInterface {
-            span: self.span,
-            id: self.id,
-            bindings: self.exports.clone(),
-            dependencies: self.dependencies.clone(),
-            types: None,
-        }
-    }
-}
-
-impl fmt::Debug for Module {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if f.alternate() {
-            let width = f.width().unwrap_or_default();
-            let padding = " ".repeat(width);
-            write!(
-                f,
-                "{padding}mod {} @{}\n{:#width$?}",
-                self.id.resolve(),
-                self.span,
-                self.body,
-                width = width + INDENTATION_WIDTH
-            )
-        } else {
-            f.debug_struct("Module")
-                .field("span", &self.span)
-                .field("body", &self.body)
-                .finish()
-        }
     }
 }
 
@@ -165,21 +143,6 @@ impl fmt::Debug for Path {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-pub enum NameId {
-    Global(DefId),
-    Local(ItemId),
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-pub struct ItemId {
-    owner: LocalDefId,
-    id: LocalItemId,
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-pub struct LocalItemId(u32);
-
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Item {
     Define(Define),
@@ -210,15 +173,6 @@ impl fmt::Debug for Item {
         }
     }
 }
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-pub struct DefId {
-    mod_id: ModId,
-    local_def_id: LocalDefId,
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-pub struct LocalDefId(u32);
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Define {

@@ -66,6 +66,10 @@ impl SynRoot {
     pub fn file_id(&self) -> FileId {
         self.file_id
     }
+
+    pub fn red(&self) -> &Rc<RedTree> {
+        &self.red
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

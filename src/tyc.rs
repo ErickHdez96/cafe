@@ -1,26 +1,22 @@
 use std::rc::Rc;
 
 use crate::{
-    diagnostics::Diagnostic,
-    env::Env,
-    syntax::ast::{Expr, ExprKind, Ident, ModId, Module, ModuleInterface, Path},
-    ty::{BuiltinTys, Ty, TyCo},
-    utils::Resolve,
+    diagnostics::Diagnostic, env::Env, new_syntax::ast, ty::{BuiltinTys, Ty, TyCo}, utils::Resolve
 };
 
 type TyCoEnv<'tyc> = Env<'tyc, String, TyCo>;
 
 struct TypeChecker<'tyc> {
-    module: ModId,
+    module: ast::ModId,
     builtins: BuiltinTys,
     diagnostics: Vec<Diagnostic>,
-    get_mod_interface: &'tyc dyn Fn(ModId) -> Rc<ModuleInterface>,
+    get_mod_interface: &'tyc dyn Fn(ast::ModId) -> Rc<ast::ModuleInterface>,
 }
 
 pub fn typecheck_module(
-    module: &Module,
+    module: &ast::Module,
     builtins: BuiltinTys,
-    get_mod_interface: impl Fn(ModId) -> Rc<ModuleInterface>,
+    get_mod_interface: impl Fn(ast::ModId) -> Rc<ast::ModuleInterface>,
 ) -> (Env<'static, String, Rc<Ty>>, Vec<Diagnostic>) {
     let mut tc = TypeChecker {
         module: module.id,
@@ -33,7 +29,7 @@ pub fn typecheck_module(
 }
 
 impl TypeChecker<'_> {
-    fn mod_(&mut self, mod_: &Module) -> Env<'static, String, Rc<Ty>> {
+    fn mod_(&mut self, mod_: &ast::Module) -> Env<'static, String, Rc<Ty>> {
         let mut tys = Env::default();
 
         let ExprKind::LetRec { defs, exprs } = &mod_.body.kind else {

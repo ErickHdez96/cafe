@@ -1,23 +1,11 @@
 pub mod ast;
 pub mod cst;
-//pub mod new_ast;
 pub mod parser;
 pub mod scanner;
 
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum SyntaxKind {
-    Root,
-
-    // AST Nodes
-
-    // Parse nodes
-    List,
-    Vector,
-    Bytevector,
-    Atom,
-    Abbreviation,
-
     // Tokens
     /// ( [
     OpenDelim,
@@ -109,8 +97,6 @@ impl SyntaxKind {
 
     pub fn expected_repr(self) -> String {
         match &self {
-            SyntaxKind::List | SyntaxKind::OpenDelim => "an open delimiter".to_string(),
-            SyntaxKind::Atom => "an atom".to_string(),
             SyntaxKind::CloseDelim => todo!(),
             SyntaxKind::SpecialOpenDelim => todo!(),
             SyntaxKind::Quote => todo!(),

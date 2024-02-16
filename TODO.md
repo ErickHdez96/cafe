@@ -21,3 +21,7 @@ The scanner must be able to change rules on the fly.
 [ ] Mark parents clean if the newly calculated value is the same as the last one.
 [ ] (maybe) If the task needs to be recalculated, delete all dependencies and trace again.
 [ ] (maybe - depends on above one) Run all dependencies, if they're unchanged, return the currently cached value
+
+# Expander
+
+[ ] Add special scope for module, so it is only callable from the library macro.
