@@ -87,7 +87,7 @@ pub fn tokenize_str(input: &str) -> Vec<Token> {
                     mt!(c, SK::HashComma; ('@', SK::HashCommaAt))
                 }
                 // TODO: Implement datum comment
-                ';' => mt!(c, SK::DatumComment),
+                ';' => mt!(c, SK::HashSemicolon),
                 't' | 'T' if is_delimiter(c.peek_nth(1)) => mt!(c, SK::True),
                 'f' | 'F' if is_delimiter(c.peek_nth(1)) => mt!(c, SK::False),
                 '\\' => {
@@ -440,7 +440,7 @@ mod tests {
     fn comment() {
         check(";", SK::SimpleComment);
         check("; hello", SK::SimpleComment);
-        check("#;", SK::DatumComment);
+        check("#;", SK::HashSemicolon);
         check("#| #| hello-world |# |#", SK::MultiComment);
     }
 

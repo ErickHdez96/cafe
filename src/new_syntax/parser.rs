@@ -89,10 +89,10 @@ impl<'input> Parser<'input> {
             | SK::HashBacktick
             | SK::HashComma
             | SK::HashCommaAt => self.abbreviation(),
-            //SK::Dot => {
-            //    self.err_span("expected a datum, found .");
-            //    self.bump();
-            //}
+            SK::Dot => {
+                self.err_span("expected a datum, found .");
+                self.bump();
+            }
             SK::True | SK::False | SK::Number | SK::Char | SK::Identifier | SK::String => {
                 self.atom()
             }
@@ -101,6 +101,7 @@ impl<'input> Parser<'input> {
                 self.err_span(msg);
                 self.bump();
             }
+            SK::HashSemicolon => self.datum_comment(),
             SK::Eof => {}
             _ => unreachable!(),
         }
@@ -265,6 +266,14 @@ impl<'input> Parser<'input> {
         self.builder.start_list(d, span);
     }
 
+    fn datum_comment(&mut self) {
+        assert_eq!(self.peek().kind, SK::HashSemicolon);
+        let t = self.next_raw();
+        self.builder.start_compound(t);
+        self.datum(true);
+        self.builder.end_datum_comment();
+    }
+
     fn at_eof(&self) -> bool {
         (self.offset + 1) >= self.tokens.len()
     }
@@ -392,9 +401,13 @@ impl CstBuilder {
         self.current
     }
 
-    fn start_list(&mut self, delim: Delim, span: Span) {
+    fn start_compound(&mut self, cst: Cst) {
         self.stack.push(std::mem::take(&mut self.current));
-        self.current.push(Cst {
+        self.current.push(cst);
+    }
+
+    fn start_list(&mut self, delim: Delim, span: Span) {
+        self.start_compound(Cst {
             span,
             kind: CstKind::Delim(delim),
         });
@@ -424,7 +437,7 @@ impl CstBuilder {
     }
 
     fn end_unterminated_list(&mut self) {
-        let mut list = std::mem::replace(
+        let list = std::mem::replace(
             &mut self.current,
             self.stack.pop().expect("must have pushed a list"),
         );
@@ -439,6 +452,17 @@ impl CstBuilder {
         self.node(Cst {
             span: list.first().unwrap().span.extend(list.last().unwrap().span),
             kind: CstKind::List(list, list_kind),
+        });
+    }
+
+    fn end_datum_comment(&mut self) {
+        let list = std::mem::replace(
+            &mut self.current,
+            self.stack.pop().expect("must have pushed a list"),
+        );
+        self.node(Cst {
+            span: list.first().unwrap().span.extend(list.last().unwrap().span),
+            kind: CstKind::DatumComment(list),
         });
     }
 
@@ -1099,6 +1123,133 @@ mod tests {
                     List@0:0..2
                       OpenDelim@0:0..1 "{"
                       CloseDelim@0:1..1 "}""#]],
+            );
+        }
+    }
+
+    mod comments {
+        use super::*;
+
+        #[test]
+        fn single_line() {
+            check(
+                ";hello world",
+                expect![[r#"SingleComment@0:0..12 ";hello world""#]],
+            );
+            check(
+                ";hi\n3",
+                expect![[r#"
+                    SingleComment@0:0..4 ";hi
+                    "
+                    Number@0:4..1 "3""#]],
+            );
+            check(
+                ";hi\n;hello",
+                expect![[r#"
+                    SingleComment@0:0..4 ";hi
+                    "
+                    SingleComment@0:4..6 ";hello""#]],
+            );
+        }
+
+        #[test]
+        fn multi_line() {
+            check(
+                "#| hello |#",
+                expect![[r##"MultiComment@0:0..11 "#| hello |#""##]],
+            );
+            check(
+                "#| hello #| there |# general #| kenobi |#|#",
+                expect![[
+                    r##"MultiComment@0:0..43 "#| hello #| there |# general #| kenobi |#|#""##
+                ]],
+            );
+            check(
+                "(3 #| hi |# 4)",
+                expect![[r##"
+                    List@0:0..14
+                      OpenDelim@0:0..1 "("
+                      Number@0:1..1 "3"
+                      Whitespace@0:2..1 " "
+                      MultiComment@0:3..8 "#| hi |#"
+                      Whitespace@0:11..1 " "
+                      Number@0:12..1 "4"
+                      CloseDelim@0:13..1 ")""##]],
+            );
+        }
+
+        #[test]
+        fn datum() {
+            check(
+                "#;3",
+                expect![[r#"
+                    DatumComment@0:0..3
+                      HashSemicolon@0:0..2
+                      Number@0:2..1 "3""#]],
+            );
+            check(
+                r"#;3 #\a",
+                expect![[r##"
+                    DatumComment@0:0..3
+                      HashSemicolon@0:0..2
+                      Number@0:2..1 "3"
+                    Whitespace@0:3..1 " "
+                    Char@0:4..3 "#\a""##]],
+            );
+            check(
+                "#;() 3",
+                expect![[r#"
+                    DatumComment@0:0..4
+                      HashSemicolon@0:0..2
+                      List@0:2..2
+                        OpenDelim@0:2..1 "("
+                        CloseDelim@0:3..1 ")"
+                    Whitespace@0:4..1 " "
+                    Number@0:5..1 "3""#]],
+            );
+            check(
+                "#;(3 #;4) 3",
+                expect![[r#"
+                    DatumComment@0:0..9
+                      HashSemicolon@0:0..2
+                      List@0:2..7
+                        OpenDelim@0:2..1 "("
+                        Number@0:3..1 "3"
+                        Whitespace@0:4..1 " "
+                        DatumComment@0:5..3
+                          HashSemicolon@0:5..2
+                          Number@0:7..1 "4"
+                        CloseDelim@0:8..1 ")"
+                    Whitespace@0:9..1 " "
+                    Number@0:10..1 "3""#]],
+            );
+            check(
+                "#;#(3) 3",
+                expect![[r##"
+                    DatumComment@0:0..6
+                      HashSemicolon@0:0..2
+                      Vector@0:2..4
+                        OpenDelim@0:2..2 "#("
+                        Number@0:4..1 "3"
+                        CloseDelim@0:5..1 ")"
+                    Whitespace@0:6..1 " "
+                    Number@0:7..1 "3""##]],
+            );
+        }
+
+        #[test]
+        fn combination() {
+            check(
+                "#;(3 #|hi|#)",
+                expect![[r##"
+                    DatumComment@0:0..12
+                      HashSemicolon@0:0..2
+                      List@0:2..10
+                        OpenDelim@0:2..1 "("
+                        Number@0:3..1 "3"
+                        Whitespace@0:4..1 " "
+                        MultiComment@0:5..6 "#|hi|#"
+                        CloseDelim@0:11..1 ")""##]],
             );
         }
     }

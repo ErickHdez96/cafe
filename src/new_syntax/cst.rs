@@ -23,12 +23,16 @@ pub enum CstKind {
     Dot,
     True,
     False,
+    HashSemicolon,
 
     Ident(Atom),
     Char(Atom),
     Number(Atom),
     String(Atom),
 
+    SingleComment(Atom),
+    MultiComment(Atom),
+    DatumComment(Vec<Cst>),
     Whitespace(Atom),
     Eof,
 }
@@ -54,12 +58,16 @@ impl Cst {
             CstKind::Dot => 1,
             CstKind::True => 2,
             CstKind::False => 2,
+            CstKind::HashSemicolon => 2,
+            CstKind::DatumComment(l) => l.iter().fold(0, |acc, a| acc + a.text_len()),
             CstKind::Eof => 0,
             CstKind::Whitespace(s)
             | CstKind::Ident(s)
             | CstKind::Char(s)
             | CstKind::String(s)
-            | CstKind::Number(s) => s.len(),
+            | CstKind::Number(s)
+            | CstKind::SingleComment(s)
+            | CstKind::MultiComment(s) => s.len(),
         }
     }
 
@@ -108,9 +116,9 @@ impl From<Token<'_>> for CstKind {
             SK::Char => CstKind::Char(value.source.into()),
             SK::Identifier => CstKind::Ident(value.source.into()),
             SK::String => CstKind::String(value.source.into()),
-            SK::SimpleComment => todo!(),
-            SK::MultiComment => todo!(),
-            SK::DatumComment => todo!(),
+            SK::SimpleComment => CstKind::SingleComment(value.source.into()),
+            SK::MultiComment => CstKind::MultiComment(value.source.into()),
+            SK::HashSemicolon => CstKind::HashSemicolon,
             SK::Whitespace => CstKind::Whitespace(value.source.into()),
             SK::Error => todo!(),
             SK::Eof => CstKind::Eof,
@@ -305,10 +313,25 @@ impl fmt::Debug for Cst {
                 CstKind::Dot => write!(f, "{indentation}Dot@{span}"),
                 CstKind::True => write!(f, "{indentation}True@{span}"),
                 CstKind::False => write!(f, "{indentation}False@{span}"),
+                CstKind::HashSemicolon => write!(f, "{indentation}HashSemicolon@{span}"),
                 CstKind::Ident(i) => write!(f, r#"{indentation}Identifier@{span} "{i}""#),
                 CstKind::Char(c) => write!(f, r#"{indentation}Char@{span} "{c}""#),
                 CstKind::String(s) => write!(f, "{indentation}String@{span} {s}"),
                 CstKind::Number(n) => write!(f, r#"{indentation}Number@{span} "{n}""#),
+                CstKind::SingleComment(c) => {
+                    write!(f, r#"{indentation}SingleComment@{span} "{c}""#)
+                }
+                CstKind::MultiComment(c) => {
+                    write!(f, r#"{indentation}MultiComment@{span} "{c}""#)
+                }
+                CstKind::DatumComment(l) => write!(
+                    f,
+                    "{indentation}DatumComment@{span}\n{}",
+                    l.iter()
+                        .map(|a| format!("{a:#width$?}", width = width + INDENTATION_WIDTH))
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                ),
                 CstKind::Whitespace(w) => write!(f, r#"{indentation}Whitespace@{span} "{w}""#),
                 CstKind::Eof => todo!(),
             }

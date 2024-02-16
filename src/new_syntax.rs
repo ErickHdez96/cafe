@@ -52,7 +52,7 @@ pub enum SyntaxKind {
     /// #| |#
     MultiComment,
     /// #;
-    DatumComment,
+    HashSemicolon,
 
     Whitespace,
     #[default]
@@ -76,7 +76,6 @@ impl SyntaxKind {
             SyntaxKind::Whitespace
                 | SyntaxKind::SimpleComment
                 | SyntaxKind::MultiComment
-                | SyntaxKind::DatumComment
                 | SyntaxKind::Shebang
         )
     }
@@ -93,35 +92,5 @@ impl SyntaxKind {
                 | SyntaxKind::HashComma
                 | SyntaxKind::HashCommaAt
         )
-    }
-
-    pub fn expected_repr(self) -> String {
-        match &self {
-            SyntaxKind::CloseDelim => todo!(),
-            SyntaxKind::SpecialOpenDelim => todo!(),
-            SyntaxKind::Quote => todo!(),
-            SyntaxKind::Backtick => todo!(),
-            SyntaxKind::Comma => todo!(),
-            SyntaxKind::CommaAt => todo!(),
-            SyntaxKind::Dot => todo!(),
-            SyntaxKind::HashQuote => todo!(),
-            SyntaxKind::HashBacktick => todo!(),
-            SyntaxKind::HashComma => todo!(),
-            SyntaxKind::HashCommaAt => todo!(),
-            SyntaxKind::True => todo!(),
-            SyntaxKind::False => todo!(),
-            SyntaxKind::Shebang => todo!(),
-            SyntaxKind::Number => todo!(),
-            SyntaxKind::Char => todo!(),
-            SyntaxKind::Identifier => todo!(),
-            SyntaxKind::String => todo!(),
-            SyntaxKind::SimpleComment => todo!(),
-            SyntaxKind::MultiComment => todo!(),
-            SyntaxKind::DatumComment => todo!(),
-            SyntaxKind::Whitespace => todo!(),
-            SyntaxKind::Error => todo!(),
-            SyntaxKind::Eof => todo!(),
-            _ => unreachable!(),
-        }
     }
 }
