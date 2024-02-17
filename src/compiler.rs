@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_variables)]
 use std::{cell::RefCell, collections::HashMap, path, rc::Rc};
 
 use crate::{
@@ -122,9 +123,10 @@ impl Compiler {
         )
     }
 
-    pub fn pass_expand(&self, root: Vec<Cst>) -> ExpanderResult {
+    pub fn pass_expand(&self, root: Vec<Rc<Cst>>, file_id: FileId) -> ExpanderResult {
         expand_root(
             root,
+            file_id,
             &self.env,
             |mid| self.import_module_id(mid),
             |mid, m| self.register_module(mid, m),
@@ -148,7 +150,7 @@ impl Compiler {
         let fid = self.resolve_module_name(mid)?;
         let pres = self.pass_parse(fid);
         self.diagnostics.borrow_mut().extend(pres.diagnostics);
-        let res = self.pass_expand(pres.root);
+        let res = self.pass_expand(pres.root, fid);
         self.diagnostics.borrow_mut().extend(res.diagnostics);
         todo!()
         //{

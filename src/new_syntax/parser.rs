@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use crate::{
     config::ParserConfig,
     diagnostics::{Diagnostic, DiagnosticBuilder},
@@ -8,13 +10,13 @@ use crate::{
 use super::{
     cst::{Cst, CstKind, Delim, ListKind, OpenDelim, Prefix},
     scanner::{tokenize_str, Token},
-    SyntaxKind as SK,
+    TokenKind as TK,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ParseResult {
     pub file_id: FileId,
-    pub root: Vec<Cst>,
+    pub root: Vec<Rc<Cst>>,
     pub diagnostics: Vec<Diagnostic>,
 }
 
@@ -73,36 +75,36 @@ impl<'input> Parser<'input> {
 
     fn datum(&mut self, bump_close_delim: bool) {
         match &self.peek().kind {
-            SK::OpenDelim => self.list(),
-            SK::CloseDelim => {
+            TK::OpenDelim => self.list(),
+            TK::CloseDelim => {
                 self.err_span("unexpected closing delimiter");
                 if bump_close_delim {
                     self.bump();
                 }
             }
-            SK::SpecialOpenDelim => self.special_list(),
-            SK::Quote
-            | SK::Backtick
-            | SK::Comma
-            | SK::CommaAt
-            | SK::HashQuote
-            | SK::HashBacktick
-            | SK::HashComma
-            | SK::HashCommaAt => self.abbreviation(),
-            SK::Dot => {
+            TK::SpecialOpenDelim => self.special_list(),
+            TK::Quote
+            | TK::Backtick
+            | TK::Comma
+            | TK::CommaAt
+            | TK::HashQuote
+            | TK::HashBacktick
+            | TK::HashComma
+            | TK::HashCommaAt => self.abbreviation(),
+            TK::Dot => {
                 self.err_span("expected a datum, found .");
                 self.bump();
             }
-            SK::True | SK::False | SK::Number | SK::Char | SK::Identifier | SK::String => {
+            TK::True | TK::False | TK::Number | TK::Char | TK::Identifier | TK::String => {
                 self.atom()
             }
-            SK::Error => {
+            TK::Error => {
                 let msg = format!("expected a datum, found {}", self.peek().source);
                 self.err_span(msg);
                 self.bump();
             }
-            SK::HashSemicolon => self.datum_comment(),
-            SK::Eof => {}
+            TK::HashSemicolon => self.datum_comment(),
+            TK::Eof => {}
             _ => unreachable!(),
         }
     }
@@ -110,35 +112,35 @@ impl<'input> Parser<'input> {
     fn atom(&mut self) {
         assert!(matches!(
             self.peek().kind,
-            SK::True | SK::False | SK::Number | SK::Char | SK::Identifier | SK::String
+            TK::True | TK::False | TK::Number | TK::Char | TK::Identifier | TK::String
         ));
         let file_id = self.file_id;
         let text_offset = self.text_offset;
         let t = self.peek_raw();
         match &t.kind {
-            SK::Number => {}
-            SK::Char => {
+            TK::Number => {}
+            TK::Char => {
                 if let Some(b) = validate_char(t.source) {
                     self.diags.push(b.span(self.peek_raw_span()).finish());
                 }
             }
-            SK::Identifier => {
+            TK::Identifier => {
                 for b in validate_identifier(t.source, file_id, text_offset.try_into().unwrap()) {
                     self.diags.push(b.finish());
                 }
             }
-            SK::String => {}
+            TK::String => {}
             _ => {}
         }
         self.bump();
     }
 
     fn list(&mut self) {
-        assert_eq!(self.peek().kind, SK::OpenDelim);
+        assert_eq!(self.peek().kind, TK::OpenDelim);
         self.open_delimiter();
 
-        if self.parse_until(|tk| matches!(tk.kind, SK::CloseDelim | SK::Dot))
-            && self.peek().kind == SK::Dot
+        if self.parse_until(|tk| matches!(tk.kind, TK::CloseDelim | TK::Dot))
+            && self.peek().kind == TK::Dot
         {
             self.dot_list_rest();
         }
@@ -147,18 +149,18 @@ impl<'input> Parser<'input> {
     }
 
     fn special_list(&mut self) {
-        assert_eq!(self.peek().kind, SK::SpecialOpenDelim);
+        assert_eq!(self.peek().kind, TK::SpecialOpenDelim);
         self.open_delimiter();
-        self.parse_until(|tk| matches!(tk.kind, SK::CloseDelim | SK::Dot));
+        self.parse_until(|tk| matches!(tk.kind, TK::CloseDelim | TK::Dot));
         // TODO: Recover from . in list
         self.expect_close_delimiter();
     }
 
     fn dot_list_rest(&mut self) {
-        assert_eq!(self.peek().kind, SK::Dot);
+        assert_eq!(self.peek().kind, TK::Dot);
         self.bump();
         self.datum(false);
-        if self.peek().kind == SK::CloseDelim {
+        if self.peek().kind == TK::CloseDelim {
             return;
         }
 
@@ -170,7 +172,7 @@ impl<'input> Parser<'input> {
         self.err_span(msg);
 
         loop {
-            if self.peek().kind == SK::CloseDelim {
+            if self.peek().kind == TK::CloseDelim {
                 return;
             }
             self.datum(false);
@@ -195,7 +197,7 @@ impl<'input> Parser<'input> {
         let (open_delim, open_delim_span) = self.delim_stack.pop().unwrap();
         let close_delim = {
             let t = self.peek();
-            if t.kind == SK::CloseDelim {
+            if t.kind == TK::CloseDelim {
                 Delim::from(t.source)
             } else {
                 let msg = format!("expected {}, found {}", open_delim.close(), t);
@@ -267,7 +269,7 @@ impl<'input> Parser<'input> {
     }
 
     fn datum_comment(&mut self) {
-        assert_eq!(self.peek().kind, SK::HashSemicolon);
+        assert_eq!(self.peek().kind, TK::HashSemicolon);
         let t = self.next_raw();
         self.builder.start_compound(t);
         self.datum(true);
@@ -392,18 +394,18 @@ impl<'input> Parser<'input> {
 
 #[derive(Default)]
 struct CstBuilder {
-    current: Vec<Cst>,
-    stack: Vec<Vec<Cst>>,
+    current: Vec<Rc<Cst>>,
+    stack: Vec<Vec<Rc<Cst>>>,
 }
 
 impl CstBuilder {
-    fn finish(self) -> Vec<Cst> {
+    fn finish(self) -> Vec<Rc<Cst>> {
         self.current
     }
 
     fn start_compound(&mut self, cst: Cst) {
         self.stack.push(std::mem::take(&mut self.current));
-        self.current.push(cst);
+        self.current.push(Rc::new(cst));
     }
 
     fn start_list(&mut self, delim: Delim, span: Span) {
@@ -418,10 +420,10 @@ impl CstBuilder {
             &mut self.current,
             self.stack.pop().expect("must have pushed a list"),
         );
-        list.push(Cst {
+        list.push(Rc::new(Cst {
             span,
             kind: CstKind::Delim(delim),
-        });
+        }));
         let list_kind = match list.first().unwrap().kind {
             CstKind::Delim(Delim::Open(OpenDelim::HashParen)) => ListKind::Vector,
             CstKind::Delim(Delim::Open(OpenDelim::BytevectorParen)) => ListKind::Bytevector,
@@ -468,10 +470,10 @@ impl CstBuilder {
 
     fn start_abbrev(&mut self, prefix: Prefix, span: Span) {
         self.stack.push(std::mem::take(&mut self.current));
-        self.current.push(Cst {
+        self.current.push(Rc::new(Cst {
             span,
             kind: CstKind::Prefix(prefix),
-        });
+        }));
     }
 
     fn end_abbrev(&mut self) {
@@ -480,8 +482,8 @@ impl CstBuilder {
             self.stack.pop().expect("must have pushed a list"),
         );
         assert_eq!(list.len(), 2);
-        let prefix = Box::new(list.remove(0));
-        let atom = Box::new(list.remove(0));
+        let prefix = list.remove(0);
+        let atom = list.remove(0);
         self.node(Cst {
             span: prefix.span.extend(atom.span),
             kind: CstKind::Abbreviation(prefix, atom),
@@ -489,7 +491,7 @@ impl CstBuilder {
     }
 
     fn node(&mut self, node: Cst) {
-        self.current.push(node);
+        self.current.push(Rc::new(node));
     }
 }
 
@@ -609,6 +611,66 @@ pub fn validate_char(s: &str) -> Option<DiagnosticBuilder> {
             | "return" | "esc" | "space" | "delete" => None,
             _ => Some(Diagnostic::builder().msg("invalid character name")),
         }
+    }
+}
+
+pub fn parse_unicode_hex_escape_sequence(s: &str) -> char {
+    u32::from_str_radix(s, 16)
+        .ok()
+        .and_then(char::from_u32)
+        .unwrap_or('\u{FFFD}')
+}
+
+pub fn parse_char(s: &str) -> char {
+    if s.len() <= 2 {
+        return '\0';
+    }
+    let s = &s[2..];
+
+    if s.chars().nth(1).is_none() {
+        // Simple case, one character
+        s.chars().next().unwrap_or_default()
+    } else if let Some(stripped) = s.strip_prefix('x') {
+        // Unicode characters
+        parse_unicode_hex_escape_sequence(stripped)
+    } else {
+        // Named character
+        match s {
+            "nul" => '\0',
+            "alarm" => '\u{7}',
+            "backspace" => '\u{8}',
+            "tab" => '\u{9}',
+            "linefeed" | "newline" => '\u{A}',
+            "vtab" => '\u{B}',
+            "page" => '\u{C}',
+            "return" => '\u{D}',
+            "esc" => '\u{1b}',
+            "space" => '\u{20}',
+            "delete" => '\u{7f}',
+            _ => '\u{FFFD}',
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Number {
+    Fixnum(usize),
+}
+
+impl Default for Number {
+    fn default() -> Self {
+        Self::Fixnum(0)
+    }
+}
+
+pub fn parse_number(s: &str, span: Span) -> Result<Number, Diagnostic> {
+    // TODO: everything
+    match s.parse::<usize>() {
+        Ok(n) => Ok(Number::Fixnum(n)),
+        Err(_) => Err(Diagnostic::builder()
+            .msg("invalid number")
+            .span(span)
+            .finish()),
     }
 }
 

@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{fmt, rc::Rc};
 
 use crate::{span::Span, utils::Atom};
 
@@ -6,16 +6,22 @@ use super::scanner::Token;
 
 const INDENTATION_WIDTH: usize = 2;
 
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Default, Clone, PartialEq, Eq, Hash)]
 pub struct Cst {
     pub span: Span,
     pub kind: CstKind,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+impl Cst {
+    pub fn new(kind: CstKind, span: Span) -> Self {
+        Self { span, kind }
+    }
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CstKind {
-    List(Vec<Cst>, ListKind),
-    Abbreviation(Box<Cst>, Box<Cst>),
+    List(Vec<Rc<Cst>>, ListKind),
+    Abbreviation(Rc<Cst>, Rc<Cst>),
     Prefix(Prefix),
 
     Delim(Delim),
@@ -32,12 +38,28 @@ pub enum CstKind {
 
     SingleComment(Atom),
     MultiComment(Atom),
-    DatumComment(Vec<Cst>),
+    DatumComment(Vec<Rc<Cst>>),
     Whitespace(Atom),
+    #[default]
+    Dummy,
     Eof,
 }
 
 impl Cst {
+    pub fn is_datum(&self) -> bool {
+        matches!(
+            self.kind,
+            CstKind::List(_, _)
+                | CstKind::Abbreviation(_, _)
+                | CstKind::True
+                | CstKind::False
+                | CstKind::Ident(_)
+                | CstKind::Char(_)
+                | CstKind::Number(_)
+                | CstKind::String(_)
+        )
+    }
+
     pub fn is_eof(&self) -> bool {
         matches!(self.kind, CstKind::Eof)
     }
@@ -60,7 +82,7 @@ impl Cst {
             CstKind::False => 2,
             CstKind::HashSemicolon => 2,
             CstKind::DatumComment(l) => l.iter().fold(0, |acc, a| acc + a.text_len()),
-            CstKind::Eof => 0,
+            CstKind::Eof | CstKind::Dummy => 0,
             CstKind::Whitespace(s)
             | CstKind::Ident(s)
             | CstKind::Char(s)
@@ -72,7 +94,13 @@ impl Cst {
     }
 
     pub fn is_trivia(&self) -> bool {
-        matches!(self.kind, CstKind::Whitespace(_))
+        matches!(
+            self.kind,
+            CstKind::Whitespace(_)
+                | CstKind::SingleComment(_)
+                | CstKind::MultiComment(_)
+                | CstKind::DatumComment(_)
+        )
     }
 
     pub fn is_open_delim(&self) -> bool {
@@ -82,7 +110,7 @@ impl Cst {
 
 impl From<Token<'_>> for CstKind {
     fn from(value: Token<'_>) -> Self {
-        use super::SyntaxKind as SK;
+        use super::TokenKind as SK;
         match value.kind {
             SK::OpenDelim | SK::SpecialOpenDelim => {
                 CstKind::Delim(Delim::Open(match value.source {
@@ -280,6 +308,31 @@ pub enum CloseDelim {
     Brace,
 }
 
+impl fmt::Display for Cst {
+    fn fmt(&self, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.kind {
+            CstKind::List(_, _) => todo!(),
+            CstKind::Abbreviation(_, _) => todo!(),
+            CstKind::Prefix(_) => todo!(),
+            CstKind::Delim(_) => todo!(),
+            CstKind::Dot => todo!(),
+            CstKind::True => todo!(),
+            CstKind::False => todo!(),
+            CstKind::HashSemicolon => todo!(),
+            CstKind::Ident(_) => todo!(),
+            CstKind::Char(_) => todo!(),
+            CstKind::Number(_) => todo!(),
+            CstKind::String(_) => todo!(),
+            CstKind::SingleComment(_) => todo!(),
+            CstKind::MultiComment(_) => todo!(),
+            CstKind::DatumComment(_) => todo!(),
+            CstKind::Whitespace(_) => todo!(),
+            CstKind::Dummy => todo!(),
+            CstKind::Eof => todo!(),
+        }
+    }
+}
+
 impl fmt::Debug for Cst {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if f.alternate() {
@@ -333,7 +386,8 @@ impl fmt::Debug for Cst {
                         .join("\n"),
                 ),
                 CstKind::Whitespace(w) => write!(f, r#"{indentation}Whitespace@{span} "{w}""#),
-                CstKind::Eof => todo!(),
+                CstKind::Dummy => write!(f, "{indentation}Dummy"),
+                CstKind::Eof => write!(f, "{indentation}EOF@{span}"),
             }
         } else {
             f.debug_struct("Cst")

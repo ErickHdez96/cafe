@@ -1,15 +1,15 @@
 use std::{fmt, iter, str::Chars};
 
-use super::{SyntaxKind, SyntaxKind as SK};
+use super::{TokenKind, TokenKind as SK};
 
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
 pub struct Token<'input> {
-    pub kind: SyntaxKind,
+    pub kind: TokenKind,
     pub source: &'input str,
 }
 
 impl<'input> Token<'input> {
-    pub fn new(kind: SyntaxKind, source: &'input str) -> Self {
+    pub fn new(kind: TokenKind, source: &'input str) -> Self {
         Self { kind, source }
     }
 
@@ -21,8 +21,8 @@ impl<'input> Token<'input> {
 impl fmt::Display for Token<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.kind {
-            SyntaxKind::Eof => "<eof>".fmt(f),
-            SyntaxKind::Whitespace => "<whitespace>".fmt(f),
+            TokenKind::Eof => "<eof>".fmt(f),
+            TokenKind::Whitespace => "<whitespace>".fmt(f),
             _ => self.source.fmt(f),
         }
     }

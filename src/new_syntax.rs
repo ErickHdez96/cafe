@@ -5,7 +5,7 @@ pub mod scanner;
 
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Hash)]
 #[repr(u8)]
-pub enum SyntaxKind {
+pub enum TokenKind {
     // Tokens
     /// ( [
     OpenDelim,
@@ -60,37 +60,37 @@ pub enum SyntaxKind {
     Eof,
 }
 
-impl SyntaxKind {
+impl TokenKind {
     pub fn is_eof(self) -> bool {
-        self == SyntaxKind::Eof
+        self == TokenKind::Eof
     }
 
     /// Returns `true` if self is a `SyntaxKind::OpenDelim` or `SyntaxKind::SpecialOpenDelim`.
     pub fn is_open_delim(self) -> bool {
-        matches!(self, SyntaxKind::OpenDelim | SyntaxKind::SpecialOpenDelim)
+        matches!(self, TokenKind::OpenDelim | TokenKind::SpecialOpenDelim)
     }
 
     pub fn is_trivia(self) -> bool {
         matches!(
             self,
-            SyntaxKind::Whitespace
-                | SyntaxKind::SimpleComment
-                | SyntaxKind::MultiComment
-                | SyntaxKind::Shebang
+            TokenKind::Whitespace
+                | TokenKind::SimpleComment
+                | TokenKind::MultiComment
+                | TokenKind::Shebang
         )
     }
 
     pub fn is_abbrev(self) -> bool {
         matches!(
             self,
-            SyntaxKind::Quote
-                | SyntaxKind::Backtick
-                | SyntaxKind::Comma
-                | SyntaxKind::CommaAt
-                | SyntaxKind::HashQuote
-                | SyntaxKind::HashBacktick
-                | SyntaxKind::HashComma
-                | SyntaxKind::HashCommaAt
+            TokenKind::Quote
+                | TokenKind::Backtick
+                | TokenKind::Comma
+                | TokenKind::CommaAt
+                | TokenKind::HashQuote
+                | TokenKind::HashBacktick
+                | TokenKind::HashComma
+                | TokenKind::HashCommaAt
         )
     }
 }

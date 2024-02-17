@@ -9,6 +9,8 @@ use crate::{
     utils::{Intern, Resolve},
 };
 
+use super::parser::Number;
+
 const INDENTATION_WIDTH: usize = 2;
 
 new_id!(pub struct ModId(u32), ModuleName, modules);
@@ -22,7 +24,7 @@ pub struct Module {
     pub exports: Env<'static, String, Binding>,
     /// All the root bindings (e.g. macro, value) of the module.
     pub bindings: Env<'static, String, Binding>,
-    pub types: Option<Env<'static, String, Rc<Ty>>>,
+    //pub types: Option<Env<'static, String, Rc<Ty>>>,
     pub body: Expr,
 }
 
@@ -158,6 +160,18 @@ impl Item {
     }
 }
 
+impl From<Define> for Item {
+    fn from(value: Define) -> Self {
+        Self::Define(value)
+    }
+}
+
+impl From<Expr> for Item {
+    fn from(value: Expr) -> Self {
+        Self::Expr(value)
+    }
+}
+
 impl fmt::Debug for Item {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if f.alternate() {
@@ -216,7 +230,8 @@ pub struct Expr {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ExprKind {
-    LetRec {
+    Let {
+        kind: LetKind,
         defs: Vec<Define>,
         exprs: Vec<Expr>,
     },
@@ -231,6 +246,7 @@ pub enum ExprKind {
     DottedList(Vec<Expr>, Box<Expr>),
     Boolean(bool),
     Char(char),
+    Number(Number),
     Var(Path),
     Error(Box<Item>),
     Void,
@@ -253,6 +269,13 @@ impl Expr {
             kind: ExprKind::Quote(Box::new(self)),
         }
     }
+
+    pub fn dummy() -> Expr {
+        Self {
+            span: Span::dummy(),
+            kind: ExprKind::Void,
+        }
+    }
 }
 
 impl fmt::Debug for Expr {
@@ -260,15 +283,15 @@ impl fmt::Debug for Expr {
         if f.alternate() {
             let width = f.width().unwrap_or_default();
             let indentation = " ".repeat(width);
+            let span = self.span;
 
             match &self.kind {
                 ExprKind::List(l) if l.is_empty() => {
-                    write!(f, "{indentation}{{() {}}}", self.span,)
+                    write!(f, "{indentation}{{() {span}}}")
                 }
                 ExprKind::List(l) => write!(
                     f,
-                    "{indentation}{{list {}\n{}}}",
-                    self.span,
+                    "{indentation}{{list {span}\n{}}}",
                     l.iter()
                         .map(|e| format!("{e:#width$?}", width = width + INDENTATION_WIDTH))
                         .collect::<Vec<_>>()
@@ -276,8 +299,7 @@ impl fmt::Debug for Expr {
                 ),
                 ExprKind::DottedList(l, dot) => write!(
                     f,
-                    "{indentation}{{dotted-list {}\n{}\n{}.\n{dot:#width$?}}}",
-                    self.span,
+                    "{indentation}{{dotted-list {span}\n{}\n{}.\n{dot:#width$?}}}",
                     l.iter()
                         .map(|e| format!("{e:#width$?}", width = width + INDENTATION_WIDTH))
                         .collect::<Vec<_>>()
@@ -288,30 +310,36 @@ impl fmt::Debug for Expr {
                 ExprKind::Boolean(b) => {
                     write!(
                         f,
-                        "{indentation}{{{} {}}}",
+                        "{indentation}{{{} {span}}}",
                         if *b { "#t" } else { "#f" },
-                        self.span,
                     )
                 }
                 ExprKind::Char(c) => {
                     write!(
                         f,
-                        "{indentation}{{#\\{} {}}}",
+                        "{indentation}{{#\\{} {span}}}",
                         if c.is_alphanumeric() {
                             format!("{c}")
                         } else {
                             format!("x{:X}", u32::from(*c))
                         },
-                        self.span,
+                    )
+                }
+                ExprKind::Number(n) => {
+                    write!(
+                        f,
+                        "{indentation}{{{} {span}}}",
+                        match n {
+                            Number::Fixnum(n) => format!("{n}"),
+                        },
                     )
                 }
                 ExprKind::Var(path) => {
                     write!(
                         f,
-                        "{indentation}{{var |{}| {} {}}}",
+                        "{indentation}{{var |{}| {} {span}}}",
                         path.value,
                         path.module.resolve(),
-                        self.span
                     )
                 }
                 ExprKind::Lambda {
@@ -320,8 +348,7 @@ impl fmt::Debug for Expr {
                     expr,
                 } => write!(
                     f,
-                    "{indentation}{{λ {}\n{}({})\n{}{}\n{expr:#width$?}}}",
-                    self.span,
+                    "{indentation}{{λ {span}\n{}({})\n{}{}\n{expr:#width$?}}}",
                     " ".repeat(width + INDENTATION_WIDTH),
                     formals
                         .iter()
@@ -338,30 +365,26 @@ impl fmt::Debug for Expr {
                 ExprKind::Error(e) => {
                     write!(
                         f,
-                        "{indentation}{{error {}\n{e:#width$?}}}",
-                        self.span,
+                        "{indentation}{{error {span}\n{e:#width$?}}}",
                         width = width + INDENTATION_WIDTH
                     )
                 }
                 ExprKind::Quote(e) => {
                     write!(
                         f,
-                        "{indentation}{{quote {}\n{e:#width$?}}}",
-                        self.span,
+                        "{indentation}{{quote {span}\n{e:#width$?}}}",
                         width = width + INDENTATION_WIDTH
                     )
                 }
                 ExprKind::If(cond, tru, fls) => write!(
                     f,
-                    "{indentation}{{if {}\n{cond:#width$?}\n{tru:#width$?}\n{fls:#width$?}}}",
-                    self.span,
+                    "{indentation}{{if {span}\n{cond:#width$?}\n{tru:#width$?}\n{fls:#width$?}}}",
                     width = width + INDENTATION_WIDTH,
                 ),
-                ExprKind::Void => write!(f, "{indentation}{{void {}}}", self.span),
-                ExprKind::LetRec { defs, exprs } => write!(
+                ExprKind::Void => write!(f, "{indentation}{{void {span}}}"),
+                ExprKind::Let { kind, defs, exprs } => write!(
                     f,
-                    "{indentation}{{letrec {}\n{}\n{}}}",
-                    self.span,
+                    "{indentation}{{{kind} {span}\n{}\n{}}}",
                     if defs.is_empty() {
                         format!("{}()", " ".repeat(width + INDENTATION_WIDTH))
                     } else {
@@ -396,5 +419,22 @@ impl fmt::Debug for Expr {
                 .field("kind", &self.kind)
                 .finish()
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum LetKind {
+    LetRec,
+}
+
+impl fmt::Display for LetKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                LetKind::LetRec => "letrec",
+            }
+        )
     }
 }
