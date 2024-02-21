@@ -1,6 +1,6 @@
 use crate::{
     env::Env,
-    new_expander::{syntax::Syntax, CstSource},
+    new_expander::{syntax::Syntax, SynSource},
     new_syntax::{
         ast::{self, Item},
         cst::{CstKind, ListKind},
@@ -9,25 +9,24 @@ use crate::{
 
 use super::{syntax::SynList, Binding, Ctx, Expanded, Expander};
 
+pub mod lambda;
+
 pub fn define_transformer(
     expander: &mut Expander,
     syn: SynList,
     env: &mut Env<String, Binding>,
 ) -> Item {
-    let span = syn.span;
+    let span = syn.span();
     let close_delim_char = syn.expected_close_char();
     let close_delim_span = syn.close_delim_span();
-    //let (sexps, _) = syn.into_parts();
-    //let mut syn_children = sexps.into_iter();
-    //syn_children.next();
-    let mut source = CstSource::new(syn.value);
+    let mut source = SynSource::new(syn.value);
     source.next();
 
     let name = match source.next() {
-        Some(cst) => match &cst.kind {
-            CstKind::Ident(n) => ast::Ident {
-                span: cst.span,
-                value: n.clone(),
+        Some(cst) => match cst {
+            Syntax::Symbol(symbol) => ast::Ident {
+                span: symbol.span(),
+                value: symbol.value().clone(),
             },
             _ => {
                 expander.emit_error(|b| {
@@ -52,16 +51,10 @@ pub fn define_transformer(
         }
     };
 
-    let expr = if let Some(e) = source.next().map(|c| {
-        expander.expand_syntax(
-            Syntax {
-                cst: c,
-                scopes: syn.scopes.clone(),
-            },
-            env,
-            Ctx::Expr,
-        )
-    }) {
+    let expr = if let Some(e) = source
+        .next()
+        .map(|syn| expander.expand_syntax(syn, env, Ctx::Expr))
+    {
         match e {
             Expanded::Item(Item::Expr(e)) => Some(e),
             _ => todo!(),
@@ -72,32 +65,32 @@ pub fn define_transformer(
 
     if let Some(c) = source.next() {
         expander.emit_error(|b| {
-            b.msg(format!("expected {}, found {}", close_delim_char, c))
-                .span(close_delim_span)
+            b.msg(format!(
+                "expected {}, found {}",
+                close_delim_char,
+                c.source()
+            ))
+            .span(close_delim_span)
         });
     }
 
     ast::Define { span, name, expr }.into()
 }
 
-pub fn if_transformer(expander: &mut Expander, syn: SynList, env: &Env<String, Binding>) -> Item {
-    assert_eq!(syn.kind, ListKind::List);
-    let span = syn.span;
+pub fn if_transformer(
+    expander: &mut Expander,
+    syn: SynList,
+    env: &mut Env<String, Binding>,
+) -> Item {
+    assert!(matches!(syn.source.kind, CstKind::List(_, ListKind::List)));
+    let span = syn.span();
     let close_delim_char = syn.expected_close_char();
     let close_delim_span = syn.close_delim_span();
-    //let (sexps, dot) = syn.into_parts();
-    //let mut children = sexps.into_iter();
-    let mut source = CstSource::new(syn.value);
+    let mut source = SynSource::new(syn.value);
     source.next();
 
     let cond = match source.next() {
-        Some(c) => expander.expand_expr(
-            Syntax {
-                cst: c,
-                scopes: syn.scopes.clone(),
-            },
-            env,
-        ),
+        Some(syn) => expander.expand_expr(syn, env),
         None => {
             expander.emit_error(|b| {
                 b.msg(format!("expected a condition, found `{close_delim_char}`"))
@@ -117,13 +110,7 @@ pub fn if_transformer(expander: &mut Expander, syn: SynList, env: &Env<String, B
     };
 
     let r#true = match source.next() {
-        Some(c) => expander.expand_expr(
-            Syntax {
-                cst: c,
-                scopes: syn.scopes.clone(),
-            },
-            env,
-        ),
+        Some(syn) => expander.expand_expr(syn, env),
         None => {
             expander.emit_error(|b| {
                 b.msg(format!(
@@ -144,14 +131,8 @@ pub fn if_transformer(expander: &mut Expander, syn: SynList, env: &Env<String, B
         }
     };
 
-    let r#false = if let Some(c) = source.next() {
-        expander.expand_expr(
-            Syntax {
-                cst: c,
-                scopes: syn.scopes,
-            },
-            env,
-        )
+    let r#false = if let Some(syn) = source.next() {
+        expander.expand_expr(syn, env)
     } else {
         ast::Expr {
             span,

@@ -30,7 +30,6 @@ impl Scopes {
         Self::default()
     }
 
-    // Remove core scope as global for all
     pub fn core() -> Self {
         Self([Scope::core()].into())
     }

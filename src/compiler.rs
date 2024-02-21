@@ -34,14 +34,14 @@ impl Default for Compiler {
 
 impl Compiler {
     pub fn new() -> Self {
-        let s = Self {
+        Self {
             config: CompilerConfig::default(),
             store: RefCell::default(),
             env: Env::default(),
             diagnostics: RefCell::default(),
-        };
+        }
         //s.feed_module(core_expander_interface());
-        s
+        //s
     }
 
     fn import_module_id(&self, mid: ModId) -> Res<Rc<ModuleInterface>> {
@@ -186,7 +186,8 @@ impl Compiler {
     pub fn compile_script(&self, path: impl AsRef<path::Path>) -> Res<Rc<Module>> {
         let mid = ModuleName::script();
         self.feed_file(mid, path.as_ref())?;
-        let m = self.expand_module(mid);
+        self.expand_module(mid)
+        //let m = self.expand_module(mid);
 
         //for dep in self.module_deps(mid) {
         //    let env = self.pass_typecheck(&self.store.borrow().get_mod(dep).unwrap());
@@ -201,7 +202,7 @@ impl Compiler {
         //    .types = Some(env);
         //}
 
-        m
+        //m
     }
 }
 
