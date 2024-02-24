@@ -6,6 +6,7 @@ pub mod env;
 pub mod expander;
 pub mod file;
 mod interner;
+pub mod rnrs;
 pub mod span;
 pub mod syntax;
 pub mod ty;

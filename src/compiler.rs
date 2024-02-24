@@ -10,6 +10,7 @@ use crate::{
         ExpanderResult, ExpanderResultMod,
     },
     file::{FileId, SourceFile},
+    rnrs::core_expander_interface,
     syntax::{
         ast::{ModId, Module, ModuleInterface, ModuleName},
         cst::Cst,
@@ -37,14 +38,14 @@ impl Default for Compiler {
 
 impl Compiler {
     pub fn new() -> Self {
-        Self {
+        let s = Self {
             config: CompilerConfig::default(),
             store: RefCell::default(),
             env: intrinsics_env(),
             diagnostics: RefCell::default(),
-        }
-        //s.feed_module(core_expander_interface());
-        //s
+        };
+        s.feed_module(core_expander_interface());
+        s
     }
 
     fn import_module_id(&self, mid: ModId) -> Res<Rc<ModuleInterface>> {
