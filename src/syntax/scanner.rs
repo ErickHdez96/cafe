@@ -1,15 +1,15 @@
 use std::{fmt, iter, str::Chars};
 
-use crate::syntax::{SyntaxKind, SyntaxKind as SK};
+use super::{TokenKind, TokenKind as SK};
 
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
 pub struct Token<'input> {
-    pub kind: SyntaxKind,
+    pub kind: TokenKind,
     pub source: &'input str,
 }
 
 impl<'input> Token<'input> {
-    pub fn new(kind: SyntaxKind, source: &'input str) -> Self {
+    pub fn new(kind: TokenKind, source: &'input str) -> Self {
         Self { kind, source }
     }
 
@@ -21,8 +21,8 @@ impl<'input> Token<'input> {
 impl fmt::Display for Token<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.kind {
-            SyntaxKind::Eof => "<eof>".fmt(f),
-            SyntaxKind::Whitespace => "<whitespace>".fmt(f),
+            TokenKind::Eof => "<eof>".fmt(f),
+            TokenKind::Whitespace => "<whitespace>".fmt(f),
             _ => self.source.fmt(f),
         }
     }
@@ -87,7 +87,7 @@ pub fn tokenize_str(input: &str) -> Vec<Token> {
                     mt!(c, SK::HashComma; ('@', SK::HashCommaAt))
                 }
                 // TODO: Implement datum comment
-                ';' => mt!(c, SK::DatumComment),
+                ';' => mt!(c, SK::HashSemicolon),
                 't' | 'T' if is_delimiter(c.peek_nth(1)) => mt!(c, SK::True),
                 'f' | 'F' if is_delimiter(c.peek_nth(1)) => mt!(c, SK::False),
                 '\\' => {
@@ -440,7 +440,7 @@ mod tests {
     fn comment() {
         check(";", SK::SimpleComment);
         check("; hello", SK::SimpleComment);
-        check("#;", SK::DatumComment);
+        check("#;", SK::HashSemicolon);
         check("#| #| hello-world |# |#", SK::MultiComment);
     }
 

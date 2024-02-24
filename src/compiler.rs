@@ -5,15 +5,18 @@ use crate::{
     config::CompilerConfig,
     diagnostics::Diagnostic,
     env::Env,
+    expander::{
+        binding::Binding, expand_module_with_config, intrinsics::intrinsics_env, ExpanderConfig,
+        ExpanderResult, ExpanderResultMod,
+    },
     file::{FileId, SourceFile},
-    new_expander::{expand_root, Binding, ExpanderResult},
-    new_syntax::{
+    syntax::{
         ast::{ModId, Module, ModuleInterface, ModuleName},
         cst::Cst,
         parser::{parse_source_file, ParseResult},
     },
     ty::BuiltinTys,
-    //tyc::typecheck_module,
+    utils::Resolve, //tyc::typecheck_module,
 };
 
 pub type Res<T> = Result<T, Diagnostic>;
@@ -37,7 +40,7 @@ impl Compiler {
         Self {
             config: CompilerConfig::default(),
             store: RefCell::default(),
-            env: Env::default(),
+            env: intrinsics_env(),
             diagnostics: RefCell::default(),
         }
         //s.feed_module(core_expander_interface());
@@ -47,7 +50,7 @@ impl Compiler {
     fn import_module_id(&self, mid: ModId) -> Res<Rc<ModuleInterface>> {
         match self.store.borrow().get_mod_interface(mid) {
             Some(m) => Ok(m),
-            None => todo!(),
+            None => todo!("tried to import new module {}", mid.resolve()),
         }
     }
 
@@ -124,13 +127,14 @@ impl Compiler {
     }
 
     pub fn pass_expand(&self, root: Vec<Rc<Cst>>, file_id: FileId) -> ExpanderResult {
-        expand_root(
+        ExpanderResult::Mod(expand_module_with_config(
             root,
-            file_id,
-            &self.env,
-            |mid| self.import_module_id(mid),
-            |mid, m| self.register_module(mid, m),
-        )
+            ExpanderConfig::default()
+                .import(&|mid| self.import_module_id(mid))
+                .register(&|mid, mod_| self.register_module(mid, mod_))
+                .base_env(&self.env)
+                .file_id(file_id),
+        ))
     }
 
     //pub fn pass_typecheck(&self, mod_: &Module) -> Env<'static, String, Rc<Ty>> {
@@ -151,16 +155,24 @@ impl Compiler {
         let pres = self.pass_parse(fid);
         self.diagnostics.borrow_mut().extend(pres.diagnostics);
         let res = self.pass_expand(pres.root, fid);
-        self.diagnostics.borrow_mut().extend(res.diagnostics);
-        todo!()
-        //{
-        //    let mut store = self.store.borrow_mut();
-        //    store
-        //        .module_interfaces
-        //        .insert(mid, Rc::new(res.module.to_interface()));
-        //    store.modules.insert(mid, Rc::new(res.module));
-        //}
-        //Ok(self.store.borrow().get_mod(mid).unwrap())
+        match res {
+            ExpanderResult::Mod(ExpanderResultMod {
+                diagnostics,
+                module,
+                ..
+            }) => {
+                self.diagnostics.borrow_mut().extend(diagnostics);
+                let mut store = self.store.borrow_mut();
+                store
+                    .module_interfaces
+                    .insert(mid, Rc::new(module.to_interface()));
+                store.modules.insert(mid, Rc::new(module));
+            }
+            ExpanderResult::Items { diagnostics, .. } => {
+                self.diagnostics.borrow_mut().extend(diagnostics);
+            }
+        }
+        Ok(self.store.borrow().get_mod(mid).unwrap())
     }
 
     //pub fn typecheck_module(&self, mid: ModId) -> Res<Rc<Module>> {

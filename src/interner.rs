@@ -1,7 +1,7 @@
 use std::{cell::RefCell, collections::HashMap, hash::Hash};
 
 use crate::{
-    new_syntax::ast::{ModId, ModuleName},
+    syntax::ast::{ModId, ModuleName},
     utils::Id,
 };
 

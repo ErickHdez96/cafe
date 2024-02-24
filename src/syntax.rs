@@ -1,23 +1,11 @@
 pub mod ast;
 pub mod cst;
-//pub mod new_ast;
 pub mod parser;
 pub mod scanner;
 
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Hash)]
 #[repr(u8)]
-pub enum SyntaxKind {
-    Root,
-
-    // AST Nodes
-
-    // Parse nodes
-    List,
-    Vector,
-    Bytevector,
-    Atom,
-    Abbreviation,
-
+pub enum TokenKind {
     // Tokens
     /// ( [
     OpenDelim,
@@ -64,7 +52,7 @@ pub enum SyntaxKind {
     /// #| |#
     MultiComment,
     /// #;
-    DatumComment,
+    HashSemicolon,
 
     Whitespace,
     #[default]
@@ -72,70 +60,37 @@ pub enum SyntaxKind {
     Eof,
 }
 
-impl SyntaxKind {
+impl TokenKind {
     pub fn is_eof(self) -> bool {
-        self == SyntaxKind::Eof
+        self == TokenKind::Eof
     }
 
     /// Returns `true` if self is a `SyntaxKind::OpenDelim` or `SyntaxKind::SpecialOpenDelim`.
     pub fn is_open_delim(self) -> bool {
-        matches!(self, SyntaxKind::OpenDelim | SyntaxKind::SpecialOpenDelim)
+        matches!(self, TokenKind::OpenDelim | TokenKind::SpecialOpenDelim)
     }
 
     pub fn is_trivia(self) -> bool {
         matches!(
             self,
-            SyntaxKind::Whitespace
-                | SyntaxKind::SimpleComment
-                | SyntaxKind::MultiComment
-                | SyntaxKind::DatumComment
-                | SyntaxKind::Shebang
+            TokenKind::Whitespace
+                | TokenKind::SimpleComment
+                | TokenKind::MultiComment
+                | TokenKind::Shebang
         )
     }
 
     pub fn is_abbrev(self) -> bool {
         matches!(
             self,
-            SyntaxKind::Quote
-                | SyntaxKind::Backtick
-                | SyntaxKind::Comma
-                | SyntaxKind::CommaAt
-                | SyntaxKind::HashQuote
-                | SyntaxKind::HashBacktick
-                | SyntaxKind::HashComma
-                | SyntaxKind::HashCommaAt
+            TokenKind::Quote
+                | TokenKind::Backtick
+                | TokenKind::Comma
+                | TokenKind::CommaAt
+                | TokenKind::HashQuote
+                | TokenKind::HashBacktick
+                | TokenKind::HashComma
+                | TokenKind::HashCommaAt
         )
-    }
-
-    pub fn expected_repr(self) -> String {
-        match &self {
-            SyntaxKind::List | SyntaxKind::OpenDelim => "an open delimiter".to_string(),
-            SyntaxKind::Atom => "an atom".to_string(),
-            SyntaxKind::CloseDelim => todo!(),
-            SyntaxKind::SpecialOpenDelim => todo!(),
-            SyntaxKind::Quote => todo!(),
-            SyntaxKind::Backtick => todo!(),
-            SyntaxKind::Comma => todo!(),
-            SyntaxKind::CommaAt => todo!(),
-            SyntaxKind::Dot => todo!(),
-            SyntaxKind::HashQuote => todo!(),
-            SyntaxKind::HashBacktick => todo!(),
-            SyntaxKind::HashComma => todo!(),
-            SyntaxKind::HashCommaAt => todo!(),
-            SyntaxKind::True => todo!(),
-            SyntaxKind::False => todo!(),
-            SyntaxKind::Shebang => todo!(),
-            SyntaxKind::Number => todo!(),
-            SyntaxKind::Char => todo!(),
-            SyntaxKind::Identifier => todo!(),
-            SyntaxKind::String => todo!(),
-            SyntaxKind::SimpleComment => todo!(),
-            SyntaxKind::MultiComment => todo!(),
-            SyntaxKind::DatumComment => todo!(),
-            SyntaxKind::Whitespace => todo!(),
-            SyntaxKind::Error => todo!(),
-            SyntaxKind::Eof => todo!(),
-            _ => unreachable!(),
-        }
     }
 }

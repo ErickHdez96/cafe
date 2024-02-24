@@ -1,7 +1,5 @@
 use std::{cell::Cell, collections::HashSet, hash, num::NonZeroUsize};
 
-use crate::syntax::cst::{SynExp, SynSymbol};
-
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Scope(u64);
 
@@ -32,7 +30,6 @@ impl Scopes {
         Self::default()
     }
 
-    // Remove core scope as global for all
     pub fn core() -> Self {
         Self([Scope::core()].into())
     }
@@ -76,44 +73,6 @@ impl hash::Hash for Scopes {
 trait Scoped {
     fn add_scope(&mut self, scope: Scope);
     fn flip_scope(&mut self, scope: Scope);
-}
-
-impl Scoped for SynExp {
-    fn add_scope(&mut self, scope: Scope) {
-        match self {
-            SynExp::List(list) => {
-                for sexp in list.sexps_mut() {
-                    sexp.add_scope(scope);
-                }
-            }
-            SynExp::Symbol(sy) => sy.add_scope(scope),
-            SynExp::Boolean(_) => todo!(),
-            SynExp::Char(_) => todo!(),
-        }
-    }
-
-    fn flip_scope(&mut self, scope: Scope) {
-        match self {
-            SynExp::List(list) => {
-                for sexp in list.sexps_mut() {
-                    sexp.flip_scope(scope);
-                }
-            }
-            SynExp::Symbol(sy) => sy.flip_scope(scope),
-            SynExp::Boolean(_) => todo!(),
-            SynExp::Char(_) => todo!(),
-        }
-    }
-}
-
-impl Scoped for SynSymbol {
-    fn add_scope(&mut self, scope: Scope) {
-        self.scopes_mut().add(scope);
-    }
-
-    fn flip_scope(&mut self, scope: Scope) {
-        self.scopes_mut().flip(scope);
-    }
 }
 
 thread_local! {

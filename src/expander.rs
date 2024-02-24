@@ -1,602 +1,348 @@
-use std::{cell::Cell, fmt, rc::Rc, slice};
+#![allow(dead_code, unused_variables)]
+use std::{fmt, rc::Rc};
 
 use crate::{
     diagnostics::{Diagnostic, DiagnosticBuilder},
     env::Env,
-    expander::scopes::{Scope, Scopes},
+    expander::intrinsics::import,
+    file::FileId,
     span::Span,
     syntax::{
-        ast::{self, ModId, Module, ModuleInterface, ModuleName},
-        cst::{SynExp, SynList, SynRoot, SynSymbol},
+        ast::{self, Item},
+        cst::{Cst, CstKind, ListKind, Prefix},
+        parser::{parse_char, parse_number, Number},
     },
+    utils::Atom,
 };
 
 use self::{
-    intrinsics::{import, module},
-    macros::NativeSyntaxTransformer,
+    binding::Binding,
+    intrinsics::{intrinsics_env, module},
 };
 
+pub mod binding;
 pub mod core;
 pub mod intrinsics;
-pub mod macros;
 pub mod scopes;
 
-type CoreDefTransformer = fn(&mut Expander, SynList, &Env<String, Binding>) -> Option<ast::Define>;
-type CoreMacroDefTransformer = fn(&mut Expander, SynList, &mut Env<String, Binding>);
-type CoreExprTransformer = fn(&mut Expander, SynList, &Env<String, Binding>) -> ast::Expr;
-type SyntaxTransformer = fn(SynList) -> Result<SynExp, Vec<Diagnostic>>;
+type SynList = Source;
+type CoreDefTransformer = fn(&mut Expander, SynList, Span, &mut Env<String, Binding>) -> Item;
+type CoreExprTransformer = fn(&mut Expander, SynList, Span, &mut Env<String, Binding>) -> Item;
+type BEnv<'parent> = Env<'parent, String, Binding>;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ExpanderResult {
-    pub module: Module,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExpanderResult {
+    Mod(ExpanderResultMod),
+    Items {
+        file_id: FileId,
+        items: Vec<Item>,
+        diagnostics: Vec<Diagnostic>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExpanderResultMod {
+    pub file_id: FileId,
+    pub module: ast::Module,
     pub diagnostics: Vec<Diagnostic>,
 }
 
-pub fn core_expander_interface() -> ModuleInterface {
-    let mut core = Env::new();
-    core.insert(
-        String::from("define"),
-        Binding::CoreDefTransformer {
-            scopes: Scopes::core(),
-            name: String::from("define"),
-            transformer: core::define_transformer,
-        },
-    );
-    core.insert(
-        String::from("define-syntax"),
-        Binding::CoreMacroDefTransformer {
-            scopes: Scopes::core(),
-            name: String::from("define-syntax"),
-            transformer: core::define_syntax_transformer,
-        },
-    );
-    core.insert(
-        String::from("lambda"),
-        Binding::CoreExprTransformer {
-            scopes: Scopes::core(),
-            name: String::from("lambda"),
-            transformer: core::lambda_transformer,
-        },
-    );
-    core.insert(
-        String::from("if"),
-        Binding::CoreExprTransformer {
-            scopes: Scopes::core(),
-            name: String::from("if"),
-            transformer: core::if_transformer,
-        },
-    );
-    core.insert(
-        String::from("quote"),
-        Binding::CoreExprTransformer {
-            scopes: Scopes::core(),
-            name: String::from("quote"),
-            transformer: core::quote_transformer,
-        },
-    );
-    ModuleInterface {
-        id: ModuleName::from_strings(vec!["rnrs", "expander", "core"]),
-        span: Span::dummy(),
-        bindings: core,
-        dependencies: vec![],
-        types: None,
+impl ExpanderResult {
+    pub fn file_id(&self) -> FileId {
+        match self {
+            ExpanderResult::Mod(m) => m.file_id,
+            ExpanderResult::Items { file_id, .. } => *file_id,
+        }
+    }
+
+    pub fn diagnostics(&self) -> &[Diagnostic] {
+        match self {
+            ExpanderResult::Mod(m) => &m.diagnostics,
+            ExpanderResult::Items { diagnostics, .. } => diagnostics,
+        }
     }
 }
 
+pub fn expand_module_with_config(
+    module: Vec<Rc<Cst>>,
+    config: ExpanderConfig,
+) -> ExpanderResultMod {
+    let mut e = Expander {
+        file_id: config.file_id.expect("missing file_id"),
+        diagnostics: vec![],
+        module: config.mod_id.unwrap_or_else(ast::ModuleName::script),
+        dependencies: vec![],
+        module_stack: vec![],
+        import: config.import.expect("an import function"),
+        register: config.register.expect("a register function"),
+    };
+    let env = intrinsics_env();
+    e.expand_module(module, config.base_env.unwrap_or(&env))
+}
+
 pub struct Expander<'i> {
-    import: &'i dyn Fn(ModId) -> Result<Rc<ModuleInterface>, Diagnostic>,
-    register: &'i dyn Fn(ModId, Module),
+    file_id: FileId,
     diagnostics: Vec<Diagnostic>,
-    module: ModId,
-    dependencies: Vec<ModId>,
-    module_stack: Vec<(ModId, Vec<ModId>)>,
+    module: ast::ModId,
+    dependencies: Vec<ast::ModId>,
+    module_stack: Vec<(ast::ModId, Vec<ast::ModId>)>,
+    import: &'i dyn Fn(ast::ModId) -> Result<Rc<ast::ModuleInterface>, Diagnostic>,
+    register: &'i dyn Fn(ast::ModId, ast::Module),
 }
 
 impl fmt::Debug for Expander<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ExpanderResult")
-            .field("import", &())
+        f.debug_struct("Expander")
+            .field("file_id", &self.file_id)
             .field("diagnostics", &self.diagnostics)
+            .field("module", &self.module)
+            .field("dependencies", &self.dependencies)
+            .field("module_stack", &self.module_stack)
             .finish()
     }
 }
 
-/// The possible values a name may be bound to at compile time.
-///
-/// Every Binding has a set of scopes in which it is visible (for macro expansion).
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Binding {
-    /// A normal runtime value. The value isn't stored here, but is generated at runtime.
-    Value {
-        scopes: Scopes,
-        /// The [`Module`] where it comes from. Macros uses may introduce bindings from other
-        /// modules without needing to import them.
-        orig_module: ModId,
-        /// The name as given in the lexical source. For debug and diagnostics.
-        orig_name: String,
-        /// Name used to identify ambigous identifiers after macro expansion. For debug and
-        /// diagnostics.
-        name: Option<String>,
-    },
-    /// Built-in importer binding.
-    Import { scopes: Scopes },
-    /// Built-in module defintion binding.
-    Module { scopes: Scopes },
-    /// Built-in `define` binding.
-    CoreDefTransformer {
-        scopes: Scopes,
-        name: String,
-        transformer: CoreDefTransformer,
-    },
-    /// Built-in `define-syntax` binding.
-    CoreMacroDefTransformer {
-        scopes: Scopes,
-        name: String,
-        transformer: CoreMacroDefTransformer,
-    },
-    /// Built-in macro-like expression bindings (e.g. if, lambda, quote, set!).
-    CoreExprTransformer {
-        scopes: Scopes,
-        name: String,
-        transformer: CoreExprTransformer,
-    },
-    /// An expression was compiled at compile-time into a transformer (e.g. lambda).
-    SyntaxTransformer {
-        scopes: Scopes,
-        name: String,
-        transformer: SyntaxTransformer,
-    },
-    /// Temporary transformer returned from syntax-rules. It should be moved to a normal
-    /// `SyntaxTransformer.
-    NativeSyntaxTransformer {
-        scopes: Scopes,
-        name: String,
-        transformer: Rc<NativeSyntaxTransformer>,
-    },
+#[derive(Default)]
+pub struct ExpanderConfig<'i, 'env> {
+    import: Option<&'i dyn Fn(ast::ModId) -> Result<Rc<ast::ModuleInterface>, Diagnostic>>,
+    register: Option<&'i dyn Fn(ast::ModId, ast::Module)>,
+    file_id: Option<FileId>,
+    base_env: Option<&'env BEnv<'env>>,
+    mod_id: Option<ast::ModId>,
 }
 
-impl Binding {
-    /// Returns a new [`Binding::Value`] [`Binding`].
-    pub fn new_var(name: &str, orig_module: ModId, scopes: Scopes) -> Self {
-        Self::Value {
-            scopes,
-            orig_name: name.to_string(),
-            orig_module,
-            name: Some(format!("{} {}", name, Self::new_id())),
-        }
+impl<'i, 'env> ExpanderConfig<'i, 'env> {
+    pub fn import(
+        mut self,
+        importer: &'i dyn Fn(ast::ModId) -> Result<Rc<ast::ModuleInterface>, Diagnostic>,
+    ) -> Self {
+        self.import = Some(importer);
+        self
     }
 
-    fn new_id() -> u64 {
-        IDENTIFIER_ID.with(|id| {
-            let old = id.get();
-            id.set(old.saturating_add(1));
-            old
-        })
+    pub fn register(mut self, register: &'i dyn Fn(ast::ModId, ast::Module)) -> Self {
+        self.register = Some(register);
+        self
     }
 
-    /// Returns the original name associated with the [`Binding`]. For debug and diagnostic
-    /// purposes.
-    pub fn name(&self) -> &str {
-        match self {
-            Binding::Import { .. } => "import",
-            Binding::Module { .. } => "module",
-            Binding::Value {
-                name, orig_name, ..
-            } => name.as_ref().unwrap_or(orig_name),
-            Binding::CoreDefTransformer { name, .. }
-            | Binding::CoreMacroDefTransformer { name, .. }
-            | Binding::CoreExprTransformer { name, .. }
-            | Binding::SyntaxTransformer { name, .. }
-            | Binding::NativeSyntaxTransformer { name, .. } => name,
-        }
+    pub fn file_id(mut self, file_id: FileId) -> Self {
+        self.file_id = Some(file_id);
+        self
     }
 
-    pub fn scopes(&self) -> &Scopes {
-        match self {
-            Binding::Value { scopes, .. }
-            | Binding::Import { scopes }
-            | Binding::Module { scopes }
-            | Binding::CoreDefTransformer { scopes, .. }
-            | Binding::CoreMacroDefTransformer { scopes, .. }
-            | Binding::CoreExprTransformer { scopes, .. }
-            | Binding::SyntaxTransformer { scopes, .. }
-            | Binding::NativeSyntaxTransformer { scopes, .. } => scopes,
-        }
+    pub fn base_env(mut self, base_env: &'env BEnv) -> Self {
+        self.base_env = Some(base_env);
+        self
     }
 
-    pub fn scopes_mut(&mut self) -> &mut Scopes {
-        match self {
-            Binding::Value { ref mut scopes, .. }
-            | Binding::Import { ref mut scopes }
-            | Binding::Module { ref mut scopes }
-            | Binding::CoreDefTransformer { ref mut scopes, .. }
-            | Binding::CoreMacroDefTransformer { ref mut scopes, .. }
-            | Binding::CoreExprTransformer { ref mut scopes, .. }
-            | Binding::SyntaxTransformer { ref mut scopes, .. }
-            | Binding::NativeSyntaxTransformer { ref mut scopes, .. } => scopes,
-        }
+    pub fn mod_id(mut self, mod_id: ast::ModId) -> Self {
+        self.mod_id = Some(mod_id);
+        self
     }
-}
-
-pub fn expand_root(
-    syn: SynRoot,
-    base_env: &Env<'_, String, Binding>,
-    import: impl Fn(ModId) -> Result<Rc<ModuleInterface>, Diagnostic>,
-    register: impl Fn(ModId, Module),
-) -> ExpanderResult {
-    let mut expander = Expander {
-        import: &import,
-        register: &register,
-        module: ModuleName::script(),
-        module_stack: vec![],
-        dependencies: vec![],
-        diagnostics: vec![],
-    };
-
-    let mid = ModuleName::from_strings(vec!["rnrs", "expander", "intrinsics"]);
-    (expander.register)(
-        mid,
-        Module {
-            span: Span::dummy(),
-            id: mid,
-            dependencies: vec![],
-            exports: intrinsics_env(),
-            bindings: Env::default(),
-            body: ast::Expr {
-                span: Span::dummy(),
-                kind: ast::ExprKind::LetRec {
-                    defs: vec![],
-                    exprs: vec![ast::Expr {
-                        span: Span::dummy(),
-                        kind: ast::ExprKind::Void,
-                    }],
-                },
-            },
-            types: None,
-        },
-    );
-
-    expander.expand_root(syn, base_env)
-}
-
-fn intrinsics_env() -> Env<'static, String, Binding> {
-    let mut env = Env::default();
-    env.insert(
-        String::from("import"),
-        Binding::Import {
-            scopes: Scopes::core(),
-        },
-    );
-    env.insert(
-        String::from("module"),
-        Binding::Module {
-            scopes: Scopes::core(),
-        },
-    );
-    env.insert(
-        String::from("library"),
-        Binding::SyntaxTransformer {
-            scopes: Scopes::core(),
-            name: String::from("library"),
-            transformer: core::library_transformer,
-        },
-    );
-    env
 }
 
 impl Expander<'_> {
-    fn expand_root(&mut self, syn: SynRoot, base_env: &Env<'_, String, Binding>) -> ExpanderResult {
-        let root_scope = Scope::new();
-        let mut bindings = base_env.enter();
-        let mut deferred = vec![];
-        let intrinsics = (self.import)(ModuleName::from_strings(vec![
-            "rnrs",
-            "expander",
-            "intrinsics",
-        ]))
-        .unwrap();
-        for (v, b) in intrinsics.bindings.bindings() {
-            bindings.insert(v.clone(), b.clone());
-        }
+    pub fn expand_module(&mut self, mod_: Vec<Rc<Cst>>, env: &BEnv) -> ExpanderResultMod {
+        let mut bindings = env.enter();
+        let items = Source::new(mod_)
+            .filter(|c| c.is_datum())
+            .map(|c| self.expand_cst(c, &mut bindings))
+            .collect::<Vec<_>>();
+        let span = items
+            .first()
+            .unwrap()
+            .span()
+            .extend(items.last().unwrap().span());
 
-        for i in syn.syn_children_with_scope(root_scope) {
-            if let Some(def) = self.expand_macro(i, &mut bindings) {
-                deferred.push(def);
-            }
-        }
-
-        let mut items = vec![];
-
-        for d in deferred {
-            if let Some(item) = self.expand_item(d, &bindings) {
-                items.push(item);
-            }
-        }
-
-        ExpanderResult {
-            module: Module {
-                id: ModuleName::script(),
-                span: syn.span(),
-                exports: Env::default(),
+        ExpanderResultMod {
+            file_id: self.file_id,
+            module: ast::Module {
+                id: self.module,
+                span,
                 bindings: Env::with_bindings(bindings.into_bindings()),
                 dependencies: std::mem::take(&mut self.dependencies),
-                body: items_to_letrec(items, syn.span()),
-                types: None,
+                exports: Env::default(),
+                body: ast::Expr {
+                    span,
+                    kind: ast::ExprKind::Body(items),
+                },
             },
             diagnostics: std::mem::take(&mut self.diagnostics),
         }
     }
 
-    fn expand_macro(&mut self, syn: SynExp, env: &mut Env<String, Binding>) -> Option<SynExp> {
-        let SynExp::List(l) = syn else {
-            return Some(syn);
-        };
-
-        if let Some(SynExp::Symbol(s)) = l.sexps().first() {
-            match resolve(s, env) {
-                Some(Binding::SyntaxTransformer { transformer, .. }) => match transformer(l) {
-                    Ok(syn) => return self.expand_macro(syn, env),
-                    Err(diags) => {
-                        self.diagnostics.extend(diags);
-                        return None;
-                    }
-                },
-                Some(Binding::NativeSyntaxTransformer { transformer, .. }) => {
-                    let s = transformer.expand(self, l, env)?;
-                    return self.expand_macro(s, env);
-                }
-                Some(Binding::Import { .. }) => {
-                    import(self, l, env);
-                    return None;
-                }
-                Some(Binding::Module { .. }) => {
-                    module(self, l);
-                    return None;
-                }
-                Some(Binding::CoreDefTransformer { scopes, .. }) => {
-                    let mut sexps = l.sexps().iter();
-                    if let Some(s) = sexps.nth(1).and_then(SynExp::symbol) {
-                        env.insert(
-                            s.value().to_string(),
-                            Binding::Value {
-                                scopes: scopes.clone(),
-                                orig_module: self.current_module(),
-                                orig_name: s.value().to_string(),
-                                name: Some(s.value().to_string()),
-                            },
-                        );
-                    }
-                }
-                Some(Binding::CoreMacroDefTransformer { transformer, .. }) => {
-                    transformer(self, l, env);
-                    return None;
-                }
-                _ => {}
+    fn expand_cst(&mut self, cst: Rc<Cst>, env: &mut BEnv) -> Item {
+        let span = cst.span;
+        match &cst.kind {
+            CstKind::List(l, k) => self.expand_list(Source::new(l.clone()), *k, span, env),
+            CstKind::Abbreviation(prefix, expr) => {
+                self.expand_abbreviation(Rc::clone(prefix), Rc::clone(expr), span, env)
             }
+            CstKind::Prefix(_) => todo!(),
+            CstKind::Delim(_) => todo!(),
+            CstKind::Dot => todo!(),
+            CstKind::True | CstKind::False => ast::Expr {
+                span,
+                kind: ast::ExprKind::Boolean(cst.kind == CstKind::True),
+            }
+            .into(),
+            CstKind::Ident(ident) => self.expand_ident(ident, span, env),
+            CstKind::Char(c) => ast::Expr {
+                span,
+                kind: ast::ExprKind::Char(parse_char(c)),
+            }
+            .into(),
+            CstKind::Number(n) => ast::Expr {
+                span,
+                kind: ast::ExprKind::Number(match parse_number(n, span) {
+                    Ok(n) => n,
+                    Err(d) => {
+                        self.diagnostics.push(d);
+                        Number::Fixnum(0)
+                    }
+                }),
+            }
+            .into(),
+            CstKind::String(_) => todo!(),
+            _ => panic!(),
         }
-        Some(SynExp::List(l))
     }
 
-    fn expand_item(&mut self, syn: SynExp, env: &Env<String, Binding>) -> Option<Item> {
-        match syn {
-            SynExp::List(l) => match l.sexps().iter().next() {
-                Some(SynExp::Symbol(s)) => match resolve(s, env) {
-                    Some(Binding::Import { .. }) => {
-                        panic!("import should have been removed in expand_macro")
+    fn expand_list(
+        &mut self,
+        mut source: Source,
+        kind: ListKind,
+        span: Span,
+        env: &mut BEnv,
+    ) -> Item {
+        match (source.peek(), kind) {
+            (Some(cst), ListKind::List) => match &cst.as_ref().kind {
+                CstKind::Ident(ident) => match env.get(ident) {
+                    Some(Binding::CoreExprTransformer { transformer, .. }) => {
+                        transformer(self, source.reset(), span, env)
                     }
                     Some(Binding::CoreDefTransformer { transformer, .. }) => {
-                        transformer(self, l, env).map(Item::Define)
+                        transformer(self, source.reset(), span, env)
                     }
-                    _ => Some(Item::Expr(self.expand_expr(SynExp::List(l), env))),
+                    Some(Binding::Import { .. }) => {
+                        let mid = import(self, source.reset(), span, env);
+                        ast::Item::Import(mid, span)
+                    }
+                    Some(Binding::Module { .. }) => {
+                        let mid = module(self, source.reset(), span, env);
+                        ast::Item::Mod(mid, span)
+                    }
+                    _ => ast::Expr {
+                        span,
+                        kind: ast::ExprKind::List(
+                            source
+                                .map(|c| match self.expand_cst(c, env) {
+                                    Item::Expr(e) => e,
+                                    _ => todo!(),
+                                })
+                                .collect(),
+                        ),
+                    }
+                    .into(),
                 },
-                _ => Some(Item::Expr(self.expand_expr(SynExp::List(l), env))),
+                _ => ast::Expr {
+                    span,
+                    kind: ast::ExprKind::List(
+                        source
+                            .map(|c| match self.expand_cst(c, env) {
+                                Item::Expr(e) => e,
+                                _ => todo!(),
+                            })
+                            .collect(),
+                    ),
+                }
+                .into(),
             },
-            SynExp::Symbol(_) | SynExp::Boolean(_) | SynExp::Char(_) => {
-                Some(Item::Expr(self.expand_expr(syn, env)))
+            (None, ListKind::List) => {
+                self.emit_error(|b| b.msg("empty lists must be quoted").span(span));
+                ast::Expr {
+                    span,
+                    kind: ast::ExprKind::List(vec![]),
+                }
+                .into()
             }
+            (None, ListKind::Vector) => todo!(),
+            (_, _) => todo!(),
         }
     }
 
-    fn expand_expr(&mut self, syn: SynExp, env: &Env<String, Binding>) -> ast::Expr {
-        let span = syn.source_span();
-        match syn {
-            SynExp::Boolean(b) => ast::Expr {
+    fn expand_ident(&mut self, ident: &Atom, span: Span, env: &BEnv) -> Item {
+        match env.get(ident) {
+            Some(Binding::Value { orig_module, .. }) => ast::Expr {
                 span,
-                kind: ast::ExprKind::Boolean(b.value()),
-            },
-            SynExp::Char(c) => ast::Expr {
-                span,
-                kind: ast::ExprKind::Char(c.value()),
-            },
-            SynExp::Symbol(s) => match resolve(&s, env) {
-                Some(Binding::Value {
-                    orig_name,
-                    name,
-                    orig_module,
-                    ..
-                }) => ast::Expr {
+                kind: ast::ExprKind::Var(ast::Path {
+                    span,
+                    module: *orig_module,
+                    value: ident.into(),
+                }),
+            }
+            .into(),
+            None => {
+                self.emit_error(|b| b.msg(format!("undefined variable {ident}")).span(span));
+                ast::Expr {
                     span,
                     kind: ast::ExprKind::Var(ast::Path {
                         span,
-                        module: *orig_module,
-                        value: name.as_ref().unwrap_or(orig_name).to_string(),
+                        module: self.module,
+                        value: ident.into(),
                     }),
-                },
-                _ => {
-                    self.emit_error(|b| {
-                        b.span(span)
-                            .msg(format!("undefined variable `{}`", s.value()))
-                    });
-                    ast::Expr {
-                        span,
-                        kind: ast::ExprKind::Var(ast::Path {
-                            span,
-                            module: self.current_module(),
-                            value: s.value().to_string(),
-                        }),
-                    }
                 }
-            },
-            SynExp::List(l) => self.expand_list_expr(l, env),
-        }
-    }
-
-    fn expand_syn(&mut self, syn: SynExp, env: &Env<String, Binding>) -> ItemSyn {
-        let span = syn.source_span();
-        if let SynExp::List(l) = syn.clone() {
-            if let Some(head) = l.sexps().first() {
-                match head {
-                    SynExp::List(_) => todo!(),
-                    SynExp::Symbol(s) => {
-                        if let Some(Binding::SyntaxTransformer { transformer, .. }) =
-                            resolve(s, env)
-                        {
-                            return match transformer(l) {
-                                Ok(res) => ItemSyn::Syn(res),
-                                Err(d) => {
-                                    self.diagnostics.extend(d);
-                                    ItemSyn::Expr(
-                                        ast::Expr {
-                                            span,
-                                            kind: ast::ExprKind::List(vec![]),
-                                        }
-                                        .into_error(),
-                                    )
-                                }
-                            };
-                        }
-                    }
-                    SynExp::Boolean(_) | SynExp::Char(_) => {}
-                }
+                .into()
             }
-        }
-        ItemSyn::Expr(self.expand_expr(syn, env))
-    }
-
-    fn expand_list_expr(&mut self, syn: SynList, env: &Env<String, Binding>) -> ast::Expr {
-        let mut elems = syn.sexps().iter();
-        match elems.next() {
-            Some(head) => match head {
-                SynExp::List(_) => match self.expand_syn(head.to_owned(), env) {
-                    ItemSyn::Expr(e) => {
-                        let mut rest_e = self.expand_exprs_iter(elems, env);
-                        rest_e.insert(0, e);
-                        ast::Expr {
-                            span: syn.source_span(),
-                            kind: ast::ExprKind::List(rest_e),
-                        }
-                    }
-                    ItemSyn::Syn(_) => todo!(),
-                },
-                SynExp::Symbol(s) => match resolve(s, env) {
-                    res @ (Some(Binding::Value { .. }) | None) => {
-                        let e = self.expand_exprs(syn.sexps(), syn.source_span(), env);
-                        if res.is_some() {
-                            e
-                        } else {
-                            e.into_error()
-                        }
-                    }
-                    Some(Binding::CoreExprTransformer { transformer, .. }) => {
-                        transformer(self, syn, env)
-                    }
-                    Some(Binding::SyntaxTransformer { transformer, .. }) => {
-                        let macro_scope = Scope::new();
-                        match transformer(syn.with_scope(macro_scope)) {
-                            Ok(mut e) => {
-                                e.flip_scope(macro_scope);
-                                self.expand_expr(e, env)
-                            }
-                            Err(d) => {
-                                self.diagnostics.extend(d);
-                                ast::Expr {
-                                    span: syn.source_span(),
-                                    kind: ast::ExprKind::List(vec![]),
-                                }
-                            }
-                        }
-                    }
-                    Some(Binding::NativeSyntaxTransformer { transformer, .. }) => {
-                        let macro_scope = Scope::new();
-                        match transformer.expand(self, syn.with_scope(macro_scope), env) {
-                            Some(mut e) => {
-                                e.flip_scope(macro_scope);
-                                self.expand_expr(e, env)
-                            }
-                            None => ast::Expr {
-                                span: syn.source_span(),
-                                kind: ast::ExprKind::List(vec![]),
-                            },
-                        }
-                    }
-                    r => todo!("{} - {r:?}", syn.red()),
-                },
-                SynExp::Boolean(_) | SynExp::Char(_) => {
-                    self.emit_error(|b| {
-                        b.span(head.source_span()).msg(format!(
-                            "tried to apply non-procedure `{}`",
-                            head.red().green()
-                        ))
-                    });
-                    let exprs = self.expand_exprs(syn.sexps(), syn.source_span(), env);
-                    exprs.into_error()
-                }
-            },
-            None => {
-                if syn.has_close_delim() {
-                    self.emit_error(|b| {
-                        b.msg("empty lists must be quoted")
-                            .span(syn.source_span())
-                            .related(vec![Diagnostic::builder().hint().msg("try '()").finish()])
-                    });
-                }
-                ast::Expr {
-                    span: syn.source_span(),
-                    kind: ast::ExprKind::List(vec![]),
-                }
-                .into_quote()
-            }
+            _ => todo!(),
         }
     }
 
-    fn expand_exprs(
+    fn expand_abbreviation(
         &mut self,
-        sexps: &[SynExp],
+        prefix: Rc<Cst>,
+        expr: Rc<Cst>,
         span: Span,
-        env: &Env<String, Binding>,
-    ) -> ast::Expr {
-        let mut exprs = vec![];
-        for e in sexps {
-            exprs.push(self.expand_expr(e.to_owned(), env));
-        }
-        ast::Expr {
-            span,
-            kind: ast::ExprKind::List(exprs),
+        env: &mut BEnv,
+    ) -> Item {
+        let prefix_span = prefix.span;
+        let CstKind::Prefix(prefix) = &prefix.kind else {
+            panic!("expected a prefix");
+        };
+
+        match prefix {
+            Prefix::Quote => self.expand_cst(
+                Rc::new(Cst {
+                    span,
+                    kind: CstKind::List(
+                        vec![
+                            Rc::new(Cst {
+                                span: prefix_span,
+                                kind: CstKind::Ident("quote".into()),
+                            }),
+                            expr,
+                        ],
+                        ListKind::List,
+                    ),
+                }),
+                env,
+            ),
+            Prefix::Backtick => todo!(),
+            Prefix::Comma => todo!(),
+            Prefix::CommaAt => todo!(),
+            Prefix::HashQuote => todo!(),
+            Prefix::HashBacktick => todo!(),
+            Prefix::HashComma => todo!(),
+            Prefix::HashCommaAt => todo!(),
         }
     }
 
-    fn expand_exprs_iter(
-        &mut self,
-        sexps: slice::Iter<SynExp>,
-        env: &Env<String, Binding>,
-    ) -> Vec<ast::Expr> {
-        let mut exprs = vec![];
-        for e in sexps {
-            exprs.push(self.expand_expr(e.to_owned(), env));
-        }
-        exprs
-    }
-
-    fn import(&mut self, mid: ModId) -> Result<Rc<ModuleInterface>, Diagnostic> {
+    fn import(&mut self, mid: ast::ModId) -> Result<Rc<ast::ModuleInterface>, Diagnostic> {
         self.dependencies.push(mid);
         (self.import)(mid)
     }
 
-    const fn current_module(&self) -> ModId {
-        self.module
-    }
-
-    fn enter_module(&mut self, module: ModId) {
+    fn enter_module(&mut self, module: ast::ModId) {
         self.module_stack.push((
             std::mem::replace(&mut self.module, module),
             std::mem::take(&mut self.dependencies),
@@ -607,97 +353,79 @@ impl Expander<'_> {
         (self.module, self.dependencies) = self.module_stack.pop().unwrap();
     }
 
+    const fn current_module(&self) -> ast::ModId {
+        self.module
+    }
+
     fn emit_error(&mut self, builder: impl Fn(DiagnosticBuilder) -> DiagnosticBuilder) {
         self.diagnostics
             .push(builder(Diagnostic::builder()).finish());
     }
 }
 
-fn resolve<'env>(var: &SynSymbol, env: &'env Env<String, Binding>) -> Option<&'env Binding> {
-    env.get_all(var.value())
-        .into_iter()
-        .fold((None, 0usize), |acc, cur| {
-            match cur.scopes().subset(var.scopes()) {
-                Some(s) if s.get() >= acc.1 => (Some(cur), s.get()),
-                _ => acc,
-            }
-        })
-        .0
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Source {
+    source: Vec<Rc<Cst>>,
+    offset: usize,
 }
 
-enum ItemSyn {
-    Expr(ast::Expr),
-    Syn(SynExp),
-}
+impl Source {
+    fn new(source: Vec<Rc<Cst>>) -> Self {
+        Self { source, offset: 0 }
+    }
 
-#[derive(Debug)]
-enum Item {
-    Define(ast::Define),
-    Expr(ast::Expr),
-}
+    fn reset(mut self) -> Self {
+        self.offset = 0;
+        self
+    }
 
-fn items_to_letrec(mut items: Vec<Item>, span: Span) -> ast::Expr {
-    let mut defs = vec![];
-    let mut exprs = vec![];
-    let last_def = items
-        .iter()
-        .rposition(|i| matches!(i, Item::Define(_)))
-        .map(|p| p + 1)
-        .unwrap_or_default();
-    let expr_items = items.split_off(last_def);
+    fn peek_raw(&self) -> Option<Rc<Cst>> {
+        self.source.get(self.offset).map(Rc::clone)
+    }
 
-    for item in items {
-        match item {
-            Item::Define(d) => {
-                defs.push(d);
+    fn next_raw(&mut self) -> Option<Rc<Cst>> {
+        match self.source.get_mut(self.offset) {
+            Some(syn) => {
+                self.offset += 1;
+                Some(syn.clone())
             }
-            Item::Expr(e) => {
-                let span = e.span;
-                defs.push(ast::Define {
-                    span,
-                    name: ast::Ident {
-                        span,
-                        value: format!("#generated {}", Binding::new_id()),
-                    },
-                    expr: Some(ast::Expr {
-                        span,
-                        kind: ast::ExprKind::Begin(vec![
-                            e,
-                            ast::Expr {
-                                span,
-                                kind: ast::ExprKind::Void,
-                            },
-                        ]),
-                    }),
-                });
-            }
+            None => None,
         }
     }
 
-    for item in expr_items {
-        match item {
-            Item::Define(d) => unreachable!("should have split off the slice here: {d:?}"),
-            Item::Expr(e) => {
-                exprs.push(e);
+    fn peek(&mut self) -> Option<Rc<Cst>> {
+        while let Some(syn) = self.peek_raw() {
+            if syn.is_datum() {
+                break;
             }
+            if syn.kind == CstKind::Dot {
+                return None;
+            }
+            self.next_raw();
         }
+        self.peek_raw()
     }
 
-    if exprs.is_empty() {
-        exprs.push(ast::Expr {
-            span,
-            kind: ast::ExprKind::Void,
-        });
-    }
-
-    ast::Expr {
-        span,
-        kind: ast::ExprKind::LetRec { defs, exprs },
+    fn dot(self) -> Self {
+        match self.peek_raw() {
+            Some(cst) if cst.kind == CstKind::Dot => Self {
+                source: self.source,
+                offset: self.offset + 1,
+            },
+            _ => self,
+        }
     }
 }
 
-thread_local! {
-    static IDENTIFIER_ID: Cell<u64> = Cell::new(1);
+impl Iterator for Source {
+    type Item = Rc<Cst>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.peek() {
+            Some(_) => self.next_raw(),
+            None => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -706,78 +434,32 @@ mod tests {
 
     use expect_test::{expect, Expect};
 
-    use crate::{
-        syntax::{cst::SynRoot, parser::parse_str},
-        utils::Resolve,
-    };
+    use crate::{span::Span, syntax::parser::parse_str, utils::Resolve};
+
+    use self::scopes::Scopes;
 
     use super::*;
 
-    struct Libs {
-        libs: RefCell<HashMap<ModId, Module>>,
-    }
-
-    impl Default for Libs {
-        fn default() -> Self {
-            let mid = ModuleName::from_strings(vec!["rnrs", "expander", "core"]);
-            Self {
-                libs: RefCell::new(HashMap::from([(
-                    mid,
-                    Module {
-                        id: mid,
-                        span: Span::dummy(),
-                        dependencies: vec![],
-                        exports: core_env(),
-                        bindings: Env::default(),
-                        body: ast::Expr {
-                            span: Span::dummy(),
-                            kind: ast::ExprKind::LetRec {
-                                defs: vec![],
-                                exprs: vec![ast::Expr {
-                                    span: Span::dummy(),
-                                    kind: ast::ExprKind::Void,
-                                }],
-                            },
-                        },
-                        types: None,
-                    },
-                )])),
-            }
-        }
-    }
-
-    impl Libs {
-        fn import(&self, mid: ModId) -> Result<Rc<ModuleInterface>, Diagnostic> {
-            Ok(Rc::new(
-                self.libs
-                    .borrow()
-                    .get(&mid)
-                    .expect(&format!("{}", mid.resolve()))
-                    .to_interface(),
-            ))
-        }
-
-        fn define(&self, mid: ModId, module: Module) {
-            self.libs.borrow_mut().insert(mid, module);
-        }
-    }
-
     fn core_env() -> Env<'static, String, Binding> {
         let mut core = Env::new();
+        core.insert(
+            String::from("import"),
+            Binding::Import {
+                scopes: Scopes::core(),
+            },
+        );
+        core.insert(
+            String::from("module"),
+            Binding::Module {
+                scopes: Scopes::core(),
+            },
+        );
         core.insert(
             String::from("define"),
             Binding::CoreDefTransformer {
                 scopes: Scopes::core(),
                 name: String::from("define"),
                 transformer: core::define_transformer,
-            },
-        );
-        core.insert(
-            String::from("define-syntax"),
-            Binding::CoreMacroDefTransformer {
-                scopes: Scopes::core(),
-                name: String::from("define-syntax"),
-                transformer: core::define_syntax_transformer,
             },
         );
         core.insert(
@@ -808,31 +490,70 @@ mod tests {
             String::from("cons"),
             Binding::Value {
                 scopes: Scopes::core(),
-                orig_module: ModuleName::from_strings(vec!["rnrs", "expander", "core"]),
-                orig_name: String::from("cons"),
-                name: None,
+                orig_module: ast::ModuleName::from_strings(vec!["rnrs", "expander", "core"]),
+                name: String::from("cons"),
             },
         );
         core
     }
 
-    pub fn check(input: &str, expected: Expect) {
+    struct Libs {
+        libs: RefCell<HashMap<ast::ModId, ast::Module>>,
+    }
+
+    impl Default for Libs {
+        fn default() -> Self {
+            let mid = ast::ModuleName::from_strings(vec!["rnrs", "expander", "core"]);
+            Self {
+                libs: RefCell::new(HashMap::from([(
+                    mid,
+                    ast::Module {
+                        id: mid,
+                        span: Span::dummy(),
+                        dependencies: vec![],
+                        exports: core_env(),
+                        bindings: Env::default(),
+                        body: ast::Expr::dummy(),
+                    },
+                )])),
+            }
+        }
+    }
+
+    impl Libs {
+        fn import(&self, mid: ast::ModId) -> Result<Rc<ast::ModuleInterface>, Diagnostic> {
+            Ok(Rc::new(
+                self.libs
+                    .borrow()
+                    .get(&mid)
+                    .expect(&format!("{}", mid.resolve()))
+                    .to_interface(),
+            ))
+        }
+
+        fn define(&self, mid: ast::ModId, module: ast::Module) {
+            self.libs.borrow_mut().insert(mid, module);
+        }
+    }
+
+    pub fn check(input: &str, expected: Expect) -> ExpanderResultMod {
         let res = parse_str(input);
         assert_eq!(res.diagnostics, vec![]);
-        let red = SynRoot::new(&res.tree, res.file_id);
-        let mut children = red.syn_children();
         let env = core_env().enter_consume();
-        let mut expander = Expander {
-            import: &|_| panic!(),
-            register: &|_, _| panic!(),
-            module: ModuleName::script(),
-            module_stack: vec![],
-            dependencies: vec![],
-            diagnostics: vec![],
-        };
-        let ast = expander.expand_expr(children.next().expect("expected an item"), &env);
-        assert_eq!(expander.diagnostics, vec![]);
-        expected.assert_debug_eq(&ast);
+        let libs = Libs::default();
+
+        let res = expand_module_with_config(
+            res.root,
+            ExpanderConfig::default()
+                .import(&|mid| libs.import(mid))
+                .register(&|mid, mod_| libs.define(mid, mod_))
+                .file_id(res.file_id)
+                .base_env(&env),
+        );
+
+        assert_eq!(res.diagnostics, vec![]);
+        expected.assert_debug_eq(&res.module.body);
+        res
     }
 
     #[test]
@@ -840,13 +561,15 @@ mod tests {
         check(
             "#t",
             expect![[r#"
-                {#t 0:0..2}
+                {body 0:0..2
+                  {#t 0:0..2}}
             "#]],
         );
         check(
             "#f",
             expect![[r#"
-                {#f 0:0..2}
+                {body 0:0..2
+                  {#f 0:0..2}}
             "#]],
         );
     }
@@ -856,91 +579,124 @@ mod tests {
         check(
             r"#\a",
             expect![[r#"
-                {#\a 0:0..3}
+                {body 0:0..3
+                  {#\a 0:0..3}}
             "#]],
         );
         check(
             r"#\λ",
             expect![[r#"
-                {#\λ 0:0..4}
+                {body 0:0..4
+                  {#\λ 0:0..4}}
             "#]],
         );
         check(
             r"#\x3bb",
             expect![[r#"
-                {#\λ 0:0..6}
+                {body 0:0..6
+                  {#\λ 0:0..6}}
             "#]],
         );
         check(
             r"#\nul",
             expect![[r#"
-                {#\x0 0:0..5}
+                {body 0:0..5
+                  {#\x0 0:0..5}}
             "#]],
         );
         check(
             r"#\alarm",
             expect![[r#"
-                {#\x7 0:0..7}
+                {body 0:0..7
+                  {#\x7 0:0..7}}
             "#]],
         );
         check(
             r"#\backspace",
             expect![[r#"
-                {#\x8 0:0..11}
+                {body 0:0..11
+                  {#\x8 0:0..11}}
             "#]],
         );
         check(
             r"#\tab",
             expect![[r#"
-                {#\x9 0:0..5}
+                {body 0:0..5
+                  {#\x9 0:0..5}}
             "#]],
         );
         check(
             r"#\linefeed",
             expect![[r#"
-                {#\xA 0:0..10}
+                {body 0:0..10
+                  {#\xA 0:0..10}}
             "#]],
         );
         check(
             r"#\newline",
             expect![[r#"
-                {#\xA 0:0..9}
+                {body 0:0..9
+                  {#\xA 0:0..9}}
             "#]],
         );
         check(
             r"#\vtab",
             expect![[r#"
-                {#\xB 0:0..6}
+                {body 0:0..6
+                  {#\xB 0:0..6}}
             "#]],
         );
         check(
             r"#\page",
             expect![[r#"
-                {#\xC 0:0..6}
+                {body 0:0..6
+                  {#\xC 0:0..6}}
             "#]],
         );
         check(
             r"#\return",
             expect![[r#"
-                {#\xD 0:0..8}
+                {body 0:0..8
+                  {#\xD 0:0..8}}
             "#]],
         );
         check(
             r"#\esc",
             expect![[r#"
-                {#\x1B 0:0..5}
+                {body 0:0..5
+                  {#\x1B 0:0..5}}
             "#]],
         );
         check(
             r"#\space",
             expect![[r#"
-                {#\x20 0:0..7}
+                {body 0:0..7
+                  {#\x20 0:0..7}}
             "#]],
         );
         check(
             r"#\delete",
             expect![[r#"
-                {#\x7F 0:0..8}
+                {body 0:0..8
+                  {#\x7F 0:0..8}}
+            "#]],
+        );
+    }
+
+    #[test]
+    fn number() {
+        check(
+            "0",
+            expect![[r#"
+                {body 0:0..1
+                  {0 0:0..1}}
+            "#]],
+        );
+        check(
+            "3",
+            expect![[r#"
+                {body 0:0..1
+                  {3 0:0..1}}
             "#]],
         );
     }
@@ -950,7 +706,8 @@ mod tests {
         check(
             "cons",
             expect![[r#"
-                {var |cons| (rnrs expander core ()) 0:0..4}
+                {body 0:0..4
+                  {var |cons| (rnrs expander core ()) 0:0..4}}
             "#]],
         );
     }
@@ -960,43 +717,43 @@ mod tests {
         check(
             r"(cons #t #f)",
             expect![[r#"
-                {list 0:0..12
-                  {var |cons| (rnrs expander core ()) 0:1..4}
-                  {#t 0:6..2}
-                  {#f 0:9..2}}
+                {body 0:0..12
+                  {list 0:0..12
+                    {var |cons| (rnrs expander core ()) 0:1..4}
+                    {#t 0:6..2}
+                    {#f 0:9..2}}}
             "#]],
         );
         check(
             r"((lambda (x) x) #t)",
             expect![[r#"
-                {list 0:0..19
-                  {λ 0:1..14
-                    ({|x 1| 0:10..1})
-                    #f
-                    {letrec 0:1..14
-                      ()
-                      {var |x 1| (#script ()) 0:13..1}}}
-                  {#t 0:16..2}}
+                {body 0:0..19
+                  {list 0:0..19
+                    {λ 0:1..14
+                      ({|x| 0:10..1})
+                      #f
+                      {body 0:1..14
+                        {var |x| (#script ()) 0:13..1}}}
+                    {#t 0:16..2}}}
             "#]],
         );
         check(
             r"((lambda (x) ((lambda (y) y) x)) #t)",
             expect![[r#"
-                {list 0:0..36
-                  {λ 0:1..31
-                    ({|x 2| 0:10..1})
-                    #f
-                    {letrec 0:1..31
-                      ()
-                      {list 0:13..18
-                        {λ 0:14..14
-                          ({|y 3| 0:23..1})
-                          #f
-                          {letrec 0:14..14
-                            ()
-                            {var |y 3| (#script ()) 0:26..1}}}
-                        {var |x 2| (#script ()) 0:29..1}}}}
-                  {#t 0:33..2}}
+                {body 0:0..36
+                  {list 0:0..36
+                    {λ 0:1..31
+                      ({|x| 0:10..1})
+                      #f
+                      {body 0:1..31
+                        {list 0:13..18
+                          {λ 0:14..14
+                            ({|y| 0:23..1})
+                            #f
+                            {body 0:14..14
+                              {var |y| (#script ()) 0:26..1}}}
+                          {var |x| (#script ()) 0:29..1}}}}
+                    {#t 0:33..2}}}
             "#]],
         );
     }
@@ -1006,136 +763,263 @@ mod tests {
         check(
             r"(if #\a #\b)",
             expect![[r#"
-                {if 0:0..12
-                  {#\a 0:4..3}
-                  {#\b 0:8..3}
-                  {void 0:0..12}}
+                {body 0:0..12
+                  {if 0:0..12
+                    {#\a 0:4..3}
+                    {#\b 0:8..3}
+                    {void 0:0..12}}}
             "#]],
         );
         check(
             r"(if #t #f #\f)",
             expect![[r#"
-                {if 0:0..14
-                  {#t 0:4..2}
-                  {#f 0:7..2}
-                  {#\f 0:10..3}}
+                {body 0:0..14
+                  {if 0:0..14
+                    {#t 0:4..2}
+                    {#f 0:7..2}
+                    {#\f 0:10..3}}}
             "#]],
         );
     }
 
-    #[test]
-    fn lambda() {
-        check(
-            "(lambda x x)",
-            expect![[r#"
-                {λ 0:0..12
-                  ()
-                  {|x 1| 0:8..1}
-                  {letrec 0:0..12
-                    ()
-                    {var |x 1| (#script ()) 0:10..1}}}
-            "#]],
-        );
+    mod lambda {
+        use super::*;
+
+        #[test]
+        fn list() {
+            check(
+                "(lambda x x)",
+                expect![[r#"
+                    {body 0:0..12
+                      {λ 0:0..12
+                        ()
+                        {|x| 0:8..1}
+                        {body 0:0..12
+                          {var |x| (#script ()) 0:10..1}}}}
+                "#]],
+            );
+        }
+
+        #[test]
+        fn id() {
+            check(
+                "(lambda (x) x)",
+                expect![[r#"
+                    {body 0:0..14
+                      {λ 0:0..14
+                        ({|x| 0:9..1})
+                        #f
+                        {body 0:0..14
+                          {var |x| (#script ()) 0:12..1}}}}
+                "#]],
+            );
+        }
+
+        #[test]
+        fn rest() {
+            check(
+                "(lambda (x . y) y)",
+                expect![[r#"
+                    {body 0:0..18
+                      {λ 0:0..18
+                        ({|x| 0:9..1})
+                        {|y| 0:13..1}
+                        {body 0:0..18
+                          {var |y| (#script ()) 0:16..1}}}}
+                "#]],
+            );
+        }
+
+        #[test]
+        fn lambda_with_define() {
+            check(
+                "(lambda x (define y x) y)",
+                expect![[r#"
+                    {body 0:0..25
+                      {λ 0:0..25
+                        ()
+                        {|x| 0:8..1}
+                        {body 0:0..25
+                          {define@0:10..12
+                            {|y| 0:18..1}
+                            {var |x| (#script ()) 0:20..1}}
+                          {var |y| (#script ()) 0:23..1}}}}
+                "#]],
+            );
+        }
+    }
+
+    mod define {
+        use super::*;
+
+        #[test]
+        fn simple_variable() {
+            check(
+                "(define x 1)",
+                expect![[r#"
+                    {body 0:0..12
+                      {define@0:0..12
+                        {|x| 0:8..1}
+                        {1 0:10..1}}}
+                "#]],
+            );
+        }
+
+        #[test]
+        fn lambda() {
+            check(
+                "(define id (lambda (x) x))",
+                expect![[r#"
+                    {body 0:0..26
+                      {define@0:0..26
+                        {|id| 0:8..2}
+                        {λ 0:11..14
+                          ({|x| 0:20..1})
+                          #f
+                          {body 0:11..14
+                            {var |x| (#script ()) 0:23..1}}}}}
+                "#]],
+            );
+        }
+    }
+
+    mod quote {
+        use super::*;
+
+        #[test]
+        fn boolean() {
+            check(
+                "(quote #t)",
+                expect![[r#"
+                    {body 0:0..10
+                      {quote 0:0..10
+                        {#t 0:7..2}}}
+                "#]],
+            );
+            check(
+                "(quote #T)",
+                expect![[r#"
+                    {body 0:0..10
+                      {quote 0:0..10
+                        {#t 0:7..2}}}
+                "#]],
+            );
+            check(
+                "(quote #f)",
+                expect![[r#"
+                    {body 0:0..10
+                      {quote 0:0..10
+                        {#f 0:7..2}}}
+                "#]],
+            );
+            check(
+                "(quote #F)",
+                expect![[r#"
+                    {body 0:0..10
+                      {quote 0:0..10
+                        {#f 0:7..2}}}
+                "#]],
+            );
+        }
+
+        #[test]
+        fn char() {
+            check(
+                r"(quote #\a)",
+                expect![[r#"
+                    {body 0:0..11
+                      {quote 0:0..11
+                        {#\a 0:7..3}}}
+                "#]],
+            );
+        }
+
+        #[test]
+        fn number() {
+            check(
+                r"(quote 3)",
+                expect![[r#"
+                    {body 0:0..9
+                      {quote 0:0..9
+                        {3 0:7..1}}}
+                "#]],
+            );
+        }
+
+        #[test]
+        fn symbol() {
+            check(
+                "(quote x)",
+                expect![[r#"
+                    {body 0:0..9
+                      {quote 0:0..9
+                        {var |x| (#script ()) 0:7..1}}}
+                "#]],
+            );
+            check(
+                "(quote lambda)",
+                expect![[r#"
+                    {body 0:0..14
+                      {quote 0:0..14
+                        {var |lambda| (#script ()) 0:7..6}}}
+                "#]],
+            );
+        }
+
+        #[test]
+        fn null() {
+            check(
+                "(quote ())",
+                expect![[r#"
+                    {body 0:0..10
+                      {quote 0:0..10
+                        {() 0:7..2}}}
+                "#]],
+            );
+        }
+
+        #[test]
+        fn list() {
+            check(
+                "(quote (x))",
+                expect![[r#"
+                    {body 0:0..11
+                      {quote 0:0..11
+                        {list 0:7..3
+                          {var |x| (#script ()) 0:8..1}}}}
+                "#]],
+            );
+            check(
+                r"(quote (x ((#\λ)) . #t))",
+                expect![[r#"
+                    {body 0:0..25
+                      {quote 0:0..25
+                        {dotted-list 0:7..17
+                          {var |x| (#script ()) 0:8..1}
+                          {list 0:10..8
+                            {list 0:11..6
+                              {#\λ 0:12..4}}}
+                          .
+                          {#t 0:21..2}}}}
+                "#]],
+            );
+        }
     }
 
     #[test]
-    #[ignore]
-    fn lambda_with_define() {
-        check("(lambda x (define y x) y)", expect![[r#""#]]);
-    }
-
-    #[test]
-    fn quote() {
-        check(
-            "(quote #t)",
-            expect![[r#"
-                {quote 0:0..10
-                  {#t 0:7..2}}
-            "#]],
-        );
-        check(
-            r"(quote #\a)",
-            expect![[r#"
-                {quote 0:0..11
-                  {#\a 0:7..3}}
-            "#]],
-        );
-        check(
-            "(quote x)",
-            expect![[r#"
-                {quote 0:0..9
-                  {var |x| (#script ()) 0:7..1}}
-            "#]],
-        );
-        check(
-            "(quote x)",
-            expect![[r#"
-                {quote 0:0..9
-                  {var |x| (#script ()) 0:7..1}}
-            "#]],
-        );
-        check(
-            "(quote ())",
-            expect![[r#"
-                {quote 0:0..10
-                  {() 0:7..2}}
-            "#]],
-        );
-        check(
-            "(quote (x))",
-            expect![[r#"
-                {quote 0:0..11
-                  {list 0:7..3
-                    {var |x| (#script ()) 0:8..1}}}
-            "#]],
-        );
-        check(
-            r"(quote (x ((#\λ)) . #t))",
-            expect![[r#"
-                {quote 0:0..25
-                  {dotted-list 0:7..17
-                    {var |x| (#script ()) 0:8..1}
-                    {list 0:10..8
-                      {list 0:11..6
-                        {#\λ 0:12..4}}}
-                    .
-                    {#t 0:21..2}}}
-            "#]],
-        );
-    }
-
-    #[test]
-    #[ignore]
     fn quote_abbrev() {
         check(
             "'#t",
             expect![[r#"
-                {quote 0:0..10
-                  {#t 0:7..2}}
+                {body 0:0..3
+                  {quote 0:0..3
+                    {#t 0:1..2}}}
             "#]],
         );
     }
 
     pub mod modules {
-        use crate::utils::Resolve;
-
         use super::*;
-
-        pub fn check(input: &str, expected: Expect) -> ExpanderResult {
-            let res = parse_str(input);
-            assert_eq!(res.diagnostics, vec![]);
-            let syn = SynRoot::new(&res.tree, res.file_id);
-            let libs = Libs::default();
-            let res = expand_root(
-                syn,
-                &Env::default(),
-                |name| libs.import(name),
-                |name, module| libs.define(name, module),
-            );
-            assert_eq!(res.diagnostics, vec![]);
-            expected.assert_debug_eq(&res.module);
-            res
-        }
 
         #[test]
         fn define_and_use_variable() {
@@ -1144,24 +1028,24 @@ mod tests {
                   (define id (lambda (x) x))
                   (id #t)",
                 expect![[r#"
-                    mod (#script ()) @0:0..103
-                      {letrec 0:0..103
-                        {define@0:51..26
-                          {|id| 0:59..2}
-                          {λ 0:62..14
-                            ({|x 1| 0:71..1})
-                            #f
-                            {letrec 0:62..14
-                              ()
-                              {var |x 1| (#script ()) 0:74..1}}}}
-                        {list 0:96..7
-                          {var |id| (#script ()) 0:97..2}
-                          {#t 0:100..2}}}
+                    {body 0:0..103
+                      {import (rnrs expander core ())@0:0..32}
+                      {define@0:51..26
+                        {|id| 0:59..2}
+                        {λ 0:62..14
+                          ({|x| 0:71..1})
+                          #f
+                          {body 0:62..14
+                            {var |x| (#script ()) 0:74..1}}}}
+                      {list 0:96..7
+                        {var |id| (#script ()) 0:97..2}
+                        {#t 0:100..2}}}
                 "#]],
             );
         }
 
         #[test]
+        #[ignore]
         fn define_and_use_macro() {
             check(
                 r"(import (rnrs expander core ()))
@@ -1177,6 +1061,7 @@ mod tests {
         }
 
         #[test]
+        #[ignore]
         fn define_let() {
             check(
                 r"(import (rnrs expander core ()))
@@ -1215,12 +1100,12 @@ mod tests {
                   (import (ID ()))
                   (id #\a)",
                 expect![[r#"
-                    mod (#script ()) @0:0..183
-                      {letrec 0:0..183
-                        ()
-                        {list 0:175..8
-                          {var |id| (ID ()) 0:176..2}
-                          {#\a 0:179..3}}}
+                    {body 0:0..183
+                      {module (ID ())@0:0..121}
+                      {import (ID ())@0:140..16}
+                      {list 0:175..8
+                        {var |id| (ID ()) 0:176..2}
+                        {#\a 0:179..3}}}
                 "#]],
             );
 
@@ -1230,7 +1115,7 @@ mod tests {
                     .iter()
                     .map(|mid| mid.resolve().clone())
                     .collect::<Vec<_>>(),
-                vec![ModuleName {
+                vec![ast::ModuleName {
                     paths: vec![String::from("ID")],
                     versions: vec![],
                 }]
@@ -1245,15 +1130,14 @@ mod tests {
                   (import (rnrs base ()))
                   (lambda (x) x)",
                 expect![[r#"
-                    mod (#script ()) @0:0..160
-                      {letrec 0:0..160
-                        ()
-                        {λ 0:146..14
-                          ({|x 1| 0:155..1})
-                          #f
-                          {letrec 0:146..14
-                            ()
-                            {var |x 1| (#script ()) 0:158..1}}}}
+                    {body 0:0..160
+                      {module (rnrs base ())@0:0..85}
+                      {import (rnrs base ())@0:104..23}
+                      {λ 0:146..14
+                        ({|x| 0:155..1})
+                        #f
+                        {body 0:146..14
+                          {var |x| (#script ()) 0:158..1}}}}
                 "#]],
             );
 
@@ -1263,7 +1147,7 @@ mod tests {
                     .iter()
                     .map(|mid| mid.resolve().clone())
                     .collect::<Vec<_>>(),
-                vec![ModuleName {
+                vec![ast::ModuleName {
                     paths: vec![String::from("rnrs"), String::from("base")],
                     versions: vec![],
                 }]
@@ -1276,11 +1160,9 @@ mod tests {
                 r"#t
                   #\a",
                 expect![[r#"
-                    mod (#script ()) @0:0..24
-                      {letrec 0:0..24
-                        ()
-                        {#t 0:0..2}
-                        {#\a 0:21..3}}
+                    {body 0:0..24
+                      {#t 0:0..2}
+                      {#\a 0:21..3}}
                 "#]],
             );
         }
@@ -1291,28 +1173,25 @@ mod tests {
                 "(import (rnrs expander core ()))
                  (lambda (x) x)",
                 expect![[r#"
-                    mod (#script ()) @0:0..64
-                      {letrec 0:0..64
-                        ()
-                        {λ 0:50..14
-                          ({|x 1| 0:59..1})
-                          #f
-                          {letrec 0:50..14
-                            ()
-                            {var |x 1| (#script ()) 0:62..1}}}}
+                    {body 0:0..64
+                      {import (rnrs expander core ())@0:0..32}
+                      {λ 0:50..14
+                        ({|x| 0:59..1})
+                        #f
+                        {body 0:50..14
+                          {var |x| (#script ()) 0:62..1}}}}
                 "#]],
             );
             let res = check(
                 "(import (rnrs expander core ()))
                  (if #t #f)",
                 expect![[r#"
-                    mod (#script ()) @0:0..60
-                      {letrec 0:0..60
-                        ()
-                        {if 0:50..10
-                          {#t 0:54..2}
-                          {#f 0:57..2}
-                          {void 0:50..10}}}
+                    {body 0:0..60
+                      {import (rnrs expander core ())@0:0..32}
+                      {if 0:50..10
+                        {#t 0:54..2}
+                        {#f 0:57..2}
+                        {void 0:50..10}}}
                 "#]],
             );
 
@@ -1322,7 +1201,7 @@ mod tests {
                     .iter()
                     .map(|mid| mid.resolve().clone())
                     .collect::<Vec<_>>(),
-                vec![ModuleName {
+                vec![ast::ModuleName {
                     paths: vec![
                         String::from("rnrs"),
                         String::from("expander"),

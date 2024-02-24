@@ -8,15 +8,15 @@ use crate::{
 };
 
 use super::{
-    cst::{GreenNodeBuilder, GreenTree},
+    cst::{Cst, CstKind, Delim, ListKind, OpenDelim, Prefix},
     scanner::{tokenize_str, Token},
-    SyntaxKind,
+    TokenKind as TK,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ParseResult {
     pub file_id: FileId,
-    pub tree: Rc<GreenTree>,
+    pub root: Vec<Rc<Cst>>,
     pub diagnostics: Vec<Diagnostic>,
 }
 
@@ -34,7 +34,7 @@ pub fn parse_str_with_config(input: &str, file_id: FileId, config: ParserConfig)
     p.parse();
     ParseResult {
         file_id,
-        tree: p.builder.finish(),
+        root: p.builder.finish(),
         diagnostics: std::mem::take(&mut p.diags),
     }
 }
@@ -44,40 +44,12 @@ struct Parser<'input> {
     tokens: Vec<Token<'input>>,
     offset: usize,
     text_offset: usize,
-    builder: GreenNodeBuilder,
+    builder: CstBuilder,
     diags: Vec<Diagnostic>,
     delim_stack: Vec<(Delim, Span)>,
     file_id: FileId,
     config: ParserConfig,
     last_seen_token_span: Span,
-}
-
-#[derive(Copy, Clone, PartialEq, Eq)]
-pub enum Delim {
-    Paren,
-    Bracket,
-    Brace,
-}
-
-impl Delim {
-    pub fn close(self) -> char {
-        match self {
-            Delim::Paren => ')',
-            Delim::Bracket => ']',
-            Delim::Brace => '}',
-        }
-    }
-}
-
-impl From<&str> for Delim {
-    fn from(value: &str) -> Self {
-        match value.chars().last().unwrap() {
-            '(' | ')' => Self::Paren,
-            '[' | ']' => Self::Bracket,
-            '{' | '}' => Self::Brace,
-            _ => unreachable!(),
-        }
-    }
 }
 
 impl<'input> Parser<'input> {
@@ -91,8 +63,6 @@ impl<'input> Parser<'input> {
     }
 
     fn parse(&mut self) {
-        self.builder.start_node(SyntaxKind::Root);
-
         loop {
             self.skip_trivia();
             if self.at_eof() {
@@ -105,87 +75,92 @@ impl<'input> Parser<'input> {
 
     fn datum(&mut self, bump_close_delim: bool) {
         match &self.peek().kind {
-            SyntaxKind::OpenDelim => self.list(),
-            SyntaxKind::CloseDelim => {
+            TK::OpenDelim => self.list(),
+            TK::CloseDelim => {
                 self.err_span("unexpected closing delimiter");
                 if bump_close_delim {
                     self.bump();
                 }
             }
-            SyntaxKind::SpecialOpenDelim => self.special_list(),
-            SyntaxKind::Quote
-            | SyntaxKind::Backtick
-            | SyntaxKind::Comma
-            | SyntaxKind::CommaAt
-            | SyntaxKind::HashQuote
-            | SyntaxKind::HashBacktick
-            | SyntaxKind::HashComma
-            | SyntaxKind::HashCommaAt => self.abbreviation(),
-            SyntaxKind::Dot => {
+            TK::SpecialOpenDelim => self.special_list(),
+            TK::Quote
+            | TK::Backtick
+            | TK::Comma
+            | TK::CommaAt
+            | TK::HashQuote
+            | TK::HashBacktick
+            | TK::HashComma
+            | TK::HashCommaAt => self.abbreviation(),
+            TK::Dot => {
                 self.err_span("expected a datum, found .");
                 self.bump();
             }
-            SyntaxKind::True
-            | SyntaxKind::False
-            | SyntaxKind::Number
-            | SyntaxKind::Char
-            | SyntaxKind::Identifier
-            | SyntaxKind::String => self.atom(),
-            SyntaxKind::Error => {
+            TK::True | TK::False | TK::Number | TK::Char | TK::Identifier | TK::String => {
+                self.atom()
+            }
+            TK::Error => {
                 let msg = format!("expected a datum, found {}", self.peek().source);
                 self.err_span(msg);
                 self.bump();
             }
-            SyntaxKind::Eof => {}
+            TK::HashSemicolon => self.datum_comment(),
+            TK::Eof => {}
             _ => unreachable!(),
         }
     }
 
     fn atom(&mut self) {
-        self.builder.start_node(SyntaxKind::Atom);
-        self.peek();
+        assert!(matches!(
+            self.peek().kind,
+            TK::True | TK::False | TK::Number | TK::Char | TK::Identifier | TK::String
+        ));
         let file_id = self.file_id;
         let text_offset = self.text_offset;
         let t = self.peek_raw();
         match &t.kind {
-            SyntaxKind::Number => {}
-            SyntaxKind::Char => {
+            TK::Number => {}
+            TK::Char => {
                 if let Some(b) = validate_char(t.source) {
                     self.diags.push(b.span(self.peek_raw_span()).finish());
                 }
             }
-            SyntaxKind::Identifier => {
+            TK::Identifier => {
                 for b in validate_identifier(t.source, file_id, text_offset.try_into().unwrap()) {
                     self.diags.push(b.finish());
                 }
             }
-            SyntaxKind::String => {}
+            TK::String => {}
             _ => {}
         }
         self.bump();
-        self.builder.finish_node();
     }
 
     fn list(&mut self) {
-        self.push_delimiter();
-        self.builder.start_node(SyntaxKind::List);
-        self.bump();
+        assert_eq!(self.peek().kind, TK::OpenDelim);
+        self.open_delimiter();
 
-        if self.parse_until(|tk| matches!(tk.kind, SyntaxKind::CloseDelim | SyntaxKind::Dot))
-            && self.peek().kind == SyntaxKind::Dot
+        if self.parse_until(|tk| matches!(tk.kind, TK::CloseDelim | TK::Dot))
+            && self.peek().kind == TK::Dot
         {
-            self.dot_list();
+            self.dot_list_rest();
         }
 
         self.expect_close_delimiter();
-        self.builder.finish_node();
     }
 
-    fn dot_list(&mut self) {
-        assert_eq!(self.peek().kind, SyntaxKind::Dot);
+    fn special_list(&mut self) {
+        assert_eq!(self.peek().kind, TK::SpecialOpenDelim);
+        self.open_delimiter();
+        self.parse_until(|tk| matches!(tk.kind, TK::CloseDelim | TK::Dot));
+        // TODO: Recover from . in list
+        self.expect_close_delimiter();
+    }
+
+    fn dot_list_rest(&mut self) {
+        assert_eq!(self.peek().kind, TK::Dot);
         self.bump();
         self.datum(false);
-        if self.peek().kind == SyntaxKind::CloseDelim {
+        if self.peek().kind == TK::CloseDelim {
             return;
         }
 
@@ -197,7 +172,7 @@ impl<'input> Parser<'input> {
         self.err_span(msg);
 
         loop {
-            if self.peek().kind == SyntaxKind::CloseDelim {
+            if self.peek().kind == TK::CloseDelim {
                 return;
             }
             self.datum(false);
@@ -205,41 +180,24 @@ impl<'input> Parser<'input> {
     }
 
     fn abbreviation(&mut self) {
-        assert!(self.peek().kind.is_abbrev());
-        self.builder.start_node(SyntaxKind::Abbreviation);
-        self.bump();
+        let node = self.next_raw();
+        let Cst {
+            span,
+            kind: CstKind::Prefix(p),
+        } = node
+        else {
+            panic!("expected a prefix");
+        };
+        self.builder.start_abbrev(p, span);
         self.datum(false);
-        self.builder.finish_node();
-    }
-
-    fn special_list(&mut self) {
-        self.push_delimiter();
-
-        let token = self.peek_raw();
-        if token.source.to_ascii_lowercase().starts_with("#vu8") {
-            if token.source != "#vu8(" {
-                self.err_span("invalid bytevector prefix, expected #vu8(");
-            }
-            self.builder.start_node(SyntaxKind::Bytevector);
-        } else {
-            if token.source != "#(" {
-                self.err_span("invalid vector prefix, expected #(");
-            }
-            self.builder.start_node(SyntaxKind::Vector);
-        }
-        self.bump();
-
-        self.parse_until(|tk| matches!(tk.kind, SyntaxKind::CloseDelim | SyntaxKind::Dot));
-
-        self.expect_close_delimiter();
-        self.builder.finish_node();
+        self.builder.end_abbrev();
     }
 
     fn expect_close_delimiter(&mut self) {
         let (open_delim, open_delim_span) = self.delim_stack.pop().unwrap();
         let close_delim = {
             let t = self.peek();
-            if t.kind == SyntaxKind::CloseDelim {
+            if t.kind == TK::CloseDelim {
                 Delim::from(t.source)
             } else {
                 let msg = format!("expected {}, found {}", open_delim.close(), t);
@@ -251,11 +209,12 @@ impl<'input> Parser<'input> {
                         })])
                 });
                 self.bump();
+                self.builder.end_unterminated_list();
                 return;
             }
         };
 
-        if open_delim != close_delim {
+        if open_delim.close() != close_delim {
             let msg = format!(
                 "expected {}, found {}",
                 open_delim.close(),
@@ -270,7 +229,8 @@ impl<'input> Parser<'input> {
                     .finish()],
             );
         }
-        self.bump();
+        let span = self.next_raw().span;
+        self.builder.end_list(close_delim, span);
     }
 
     fn parse_until(&mut self, pred: impl Fn(&Token) -> bool) -> bool {
@@ -282,13 +242,20 @@ impl<'input> Parser<'input> {
         parsed
     }
 
-    fn push_delimiter(&mut self) {
-        let token = self.peek_raw();
-        assert!(token.kind.is_open_delim());
-        let delim = Delim::from(token.source);
-        let len = token.source.len().try_into().unwrap();
-        if delim == Delim::Brace && !self.config.braces {
-            self.err_sources(
+    /// Starts a new list depending on the type of the open delimiter at the current position.
+    fn open_delimiter(&mut self) {
+        let lo = self.text_offset.try_into().unwrap();
+        let node = self.next_raw();
+        let len = node.text_len();
+        let Cst {
+            kind: CstKind::Delim(d),
+            ..
+        } = node
+        else {
+            panic!("expected an open delim")
+        };
+        if d.is_brace() && !self.config.braces {
+            self.err_sources_consumed(
                 "braces not supported",
                 vec![Diagnostic::builder()
                     .hint()
@@ -296,10 +263,17 @@ impl<'input> Parser<'input> {
                     .finish()],
             );
         }
-        self.delim_stack.push((
-            delim,
-            Span::new(self.file_id, self.text_offset.try_into().unwrap(), len),
-        ));
+        let span = Span::new(self.file_id, lo, len.try_into().unwrap());
+        self.delim_stack.push((d, span));
+        self.builder.start_list(d, span);
+    }
+
+    fn datum_comment(&mut self) {
+        assert_eq!(self.peek().kind, TK::HashSemicolon);
+        let t = self.next_raw();
+        self.builder.start_compound(t);
+        self.datum(true);
+        self.builder.end_datum_comment();
     }
 
     fn at_eof(&self) -> bool {
@@ -332,39 +306,43 @@ impl<'input> Parser<'input> {
         }
     }
 
-    fn next_raw(&mut self) -> Token {
+    fn next_raw(&mut self) -> Cst {
         match self.tokens.get_mut(self.offset) {
             Some(t) => {
                 let t = std::mem::take(t);
+                let start = self.text_offset;
+
+                if !t.is_trivia() {
+                    self.last_seen_token_span = Span::new(
+                        self.file_id,
+                        self.text_offset.try_into().unwrap(),
+                        t.source.len().try_into().unwrap(),
+                    );
+                }
                 self.offset += 1;
                 self.text_offset += t.source.len();
-                t
+                Cst {
+                    span: Span::new(
+                        self.file_id,
+                        start.try_into().unwrap(),
+                        t.source.len().try_into().unwrap(),
+                    ),
+                    kind: t.into(),
+                }
             }
-            _ => Token {
-                kind: SyntaxKind::Eof,
-                ..Default::default()
+            _ => Cst {
+                span: self.last_seen_token_span,
+                kind: CstKind::Eof,
             },
         }
     }
 
     fn bump(&mut self) {
-        let lo = self.text_offset;
         let t = self.next_raw();
-        let kind = t.kind;
-        if kind.is_eof() {
+        if t.is_eof() {
             return;
         }
-        let text = t.source.to_string();
-
-        if !kind.is_trivia() && !kind.is_eof() {
-            self.last_seen_token_span = Span::new(
-                self.file_id,
-                lo.try_into().unwrap(),
-                text.len().try_into().unwrap(),
-            );
-        }
-
-        self.builder.push_token(kind, text);
+        self.builder.node(t);
     }
 
     fn skip_trivia(&mut self) {
@@ -400,6 +378,120 @@ impl<'input> Parser<'input> {
                 .related(sources)
                 .finish(),
         );
+    }
+
+    fn err_sources_consumed(&mut self, msg: impl Into<String>, sources: Vec<Diagnostic>) {
+        self.diags.push(
+            Diagnostic::builder()
+                .error()
+                .msg(msg)
+                .span(self.last_seen_token_span)
+                .related(sources)
+                .finish(),
+        );
+    }
+}
+
+#[derive(Default)]
+struct CstBuilder {
+    current: Vec<Rc<Cst>>,
+    stack: Vec<Vec<Rc<Cst>>>,
+}
+
+impl CstBuilder {
+    fn finish(self) -> Vec<Rc<Cst>> {
+        self.current
+    }
+
+    fn start_compound(&mut self, cst: Cst) {
+        self.stack.push(std::mem::take(&mut self.current));
+        self.current.push(Rc::new(cst));
+    }
+
+    fn start_list(&mut self, delim: Delim, span: Span) {
+        self.start_compound(Cst {
+            span,
+            kind: CstKind::Delim(delim),
+        });
+    }
+
+    fn end_list(&mut self, delim: Delim, span: Span) {
+        let mut list = std::mem::replace(
+            &mut self.current,
+            self.stack.pop().expect("must have pushed a list"),
+        );
+        list.push(Rc::new(Cst {
+            span,
+            kind: CstKind::Delim(delim),
+        }));
+        let list_kind = match list.first().unwrap().kind {
+            CstKind::Delim(Delim::Open(OpenDelim::HashParen)) => ListKind::Vector,
+            CstKind::Delim(Delim::Open(OpenDelim::BytevectorParen)) => ListKind::Bytevector,
+            CstKind::Delim(Delim::Open(OpenDelim::Paren))
+            | CstKind::Delim(Delim::Open(OpenDelim::Bracket))
+            | CstKind::Delim(Delim::Open(OpenDelim::Brace)) => ListKind::List,
+            _ => unreachable!(),
+        };
+        self.node(Cst {
+            span: list.first().unwrap().span.extend(list.last().unwrap().span),
+            kind: CstKind::List(list, list_kind),
+        });
+    }
+
+    fn end_unterminated_list(&mut self) {
+        let list = std::mem::replace(
+            &mut self.current,
+            self.stack.pop().expect("must have pushed a list"),
+        );
+        let list_kind = match list.first().unwrap().kind {
+            CstKind::Delim(Delim::Open(OpenDelim::HashParen)) => ListKind::Vector,
+            CstKind::Delim(Delim::Open(OpenDelim::BytevectorParen)) => ListKind::Bytevector,
+            CstKind::Delim(Delim::Open(OpenDelim::Paren))
+            | CstKind::Delim(Delim::Open(OpenDelim::Bracket))
+            | CstKind::Delim(Delim::Open(OpenDelim::Brace)) => ListKind::List,
+            _ => unreachable!(),
+        };
+        self.node(Cst {
+            span: list.first().unwrap().span.extend(list.last().unwrap().span),
+            kind: CstKind::List(list, list_kind),
+        });
+    }
+
+    fn end_datum_comment(&mut self) {
+        let list = std::mem::replace(
+            &mut self.current,
+            self.stack.pop().expect("must have pushed a list"),
+        );
+        self.node(Cst {
+            span: list.first().unwrap().span.extend(list.last().unwrap().span),
+            kind: CstKind::DatumComment(list),
+        });
+    }
+
+    fn start_abbrev(&mut self, prefix: Prefix, span: Span) {
+        self.stack.push(std::mem::take(&mut self.current));
+        self.current.push(Rc::new(Cst {
+            span,
+            kind: CstKind::Prefix(prefix),
+        }));
+    }
+
+    fn end_abbrev(&mut self) {
+        let mut list = std::mem::replace(
+            &mut self.current,
+            self.stack.pop().expect("must have pushed a list"),
+        );
+        assert_eq!(list.len(), 2);
+        let prefix = list.remove(0);
+        let atom = list.remove(0);
+        self.node(Cst {
+            span: prefix.span.extend(atom.span),
+            kind: CstKind::Abbreviation(prefix, atom),
+        });
+    }
+
+    fn node(&mut self, node: Cst) {
+        self.current.push(Rc::new(node));
     }
 }
 
@@ -560,6 +652,28 @@ pub fn parse_char(s: &str) -> char {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Number {
+    Fixnum(usize),
+}
+
+impl Default for Number {
+    fn default() -> Self {
+        Self::Fixnum(0)
+    }
+}
+
+pub fn parse_number(s: &str, span: Span) -> Result<Number, Diagnostic> {
+    // TODO: everything
+    match s.parse::<usize>() {
+        Ok(n) => Ok(Number::Fixnum(n)),
+        Err(_) => Err(Diagnostic::builder()
+            .msg("invalid number")
+            .span(span)
+            .finish()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -574,293 +688,83 @@ mod tests {
             "{}",
             input
         );
-        expected.assert_debug_eq(&result.tree);
+        expected.assert_eq(
+            &result
+                .root
+                .into_iter()
+                .map(|c| format!("{c:#?}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
     }
 
     fn check_error(input: &str, errors: Vec<Diagnostic>, expected: Expect) {
         let result = parse_str(input);
         assert_eq!(errors, result.diagnostics, "{}", input);
-        expected.assert_debug_eq(&result.tree);
+        expected.assert_eq(
+            &result
+                .root
+                .into_iter()
+                .map(|c| format!("{c:#?}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
     }
 
     #[test]
     fn boolean() {
-        check(
-            "#t",
-            expect![[r##"
-                Root@0..2
-                  Atom@0..2
-                    True@0..2 "#t"
-            "##]],
-        );
-        check(
-            "#T",
-            expect![[r##"
-                Root@0..2
-                  Atom@0..2
-                    True@0..2 "#T"
-            "##]],
-        );
-        check(
-            "#f",
-            expect![[r##"
-                Root@0..2
-                  Atom@0..2
-                    False@0..2 "#f"
-            "##]],
-        );
-        check(
-            "#F",
-            expect![[r##"
-                Root@0..2
-                  Atom@0..2
-                    False@0..2 "#F"
-            "##]],
-        );
+        check("#t", expect!["True@0:0..2"]);
+        check("#T", expect!["True@0:0..2"]);
+        check("#f", expect!["False@0:0..2"]);
+        check("#F", expect!["False@0:0..2"]);
     }
 
     #[test]
     fn char() {
-        check(
-            r"#\a",
-            expect![[r##"
-                Root@0..3
-                  Atom@0..3
-                    Char@0..3 "#\a"
-            "##]],
-        );
-        check(
-            r"#\ ",
-            expect![[r##"
-                Root@0..3
-                  Atom@0..3
-                    Char@0..3 "#\ "
-            "##]],
-        );
-        check(
-            r"#\x",
-            expect![[r##"
-                Root@0..3
-                  Atom@0..3
-                    Char@0..3 "#\x"
-            "##]],
-        );
-        check(
-            r"#\n",
-            expect![[r##"
-                Root@0..3
-                  Atom@0..3
-                    Char@0..3 "#\n"
-            "##]],
-        );
-        check(
-            r"#\x3bb",
-            expect![[r##"
-                Root@0..6
-                  Atom@0..6
-                    Char@0..6 "#\x3bb"
-            "##]],
-        );
-        check(
-            r"#\nul",
-            expect![[r##"
-                Root@0..5
-                  Atom@0..5
-                    Char@0..5 "#\nul"
-            "##]],
-        );
-        check(
-            r"#\alarm",
-            expect![[r##"
-                Root@0..7
-                  Atom@0..7
-                    Char@0..7 "#\alarm"
-            "##]],
-        );
-        check(
-            r"#\backspace",
-            expect![[r##"
-                Root@0..11
-                  Atom@0..11
-                    Char@0..11 "#\backspace"
-            "##]],
-        );
-        check(
-            r"#\tab",
-            expect![[r##"
-                Root@0..5
-                  Atom@0..5
-                    Char@0..5 "#\tab"
-            "##]],
-        );
-        check(
-            r"#\linefeed",
-            expect![[r##"
-                Root@0..10
-                  Atom@0..10
-                    Char@0..10 "#\linefeed"
-            "##]],
-        );
-        check(
-            r"#\newline",
-            expect![[r##"
-                Root@0..9
-                  Atom@0..9
-                    Char@0..9 "#\newline"
-            "##]],
-        );
-        check(
-            r"#\vtab",
-            expect![[r##"
-                Root@0..6
-                  Atom@0..6
-                    Char@0..6 "#\vtab"
-            "##]],
-        );
-        check(
-            r"#\page",
-            expect![[r##"
-                Root@0..6
-                  Atom@0..6
-                    Char@0..6 "#\page"
-            "##]],
-        );
-        check(
-            r"#\return",
-            expect![[r##"
-                Root@0..8
-                  Atom@0..8
-                    Char@0..8 "#\return"
-            "##]],
-        );
-        check(
-            r"#\esc",
-            expect![[r##"
-                Root@0..5
-                  Atom@0..5
-                    Char@0..5 "#\esc"
-            "##]],
-        );
-        check(
-            r"#\space",
-            expect![[r##"
-                Root@0..7
-                  Atom@0..7
-                    Char@0..7 "#\space"
-            "##]],
-        );
-        check(
-            r"#\delete",
-            expect![[r##"
-                Root@0..8
-                  Atom@0..8
-                    Char@0..8 "#\delete"
-            "##]],
-        );
+        check(r"#\a", expect![[r##"Char@0:0..3 "#\a""##]]);
+        check(r"#\ ", expect![[r##"Char@0:0..3 "#\ ""##]]);
+        check(r"#\x", expect![[r##"Char@0:0..3 "#\x""##]]);
+        check(r"#\n", expect![[r##"Char@0:0..3 "#\n""##]]);
+        check(r"#\x3bb", expect![[r##"Char@0:0..6 "#\x3bb""##]]);
+        check(r"#\nul", expect![[r##"Char@0:0..5 "#\nul""##]]);
+        check(r"#\alarm", expect![[r##"Char@0:0..7 "#\alarm""##]]);
+        check(r"#\backspace", expect![[r##"Char@0:0..11 "#\backspace""##]]);
+        check(r"#\tab", expect![[r##"Char@0:0..5 "#\tab""##]]);
+        check(r"#\linefeed", expect![[r##"Char@0:0..10 "#\linefeed""##]]);
+        check(r"#\newline", expect![[r##"Char@0:0..9 "#\newline""##]]);
+        check(r"#\vtab", expect![[r##"Char@0:0..6 "#\vtab""##]]);
+        check(r"#\page", expect![[r##"Char@0:0..6 "#\page""##]]);
+        check(r"#\return", expect![[r##"Char@0:0..8 "#\return""##]]);
+        check(r"#\esc", expect![[r##"Char@0:0..5 "#\esc""##]]);
+        check(r"#\space", expect![[r##"Char@0:0..7 "#\space""##]]);
+        check(r"#\delete", expect![[r##"Char@0:0..8 "#\delete""##]]);
     }
 
     #[test]
     fn number() {
-        check(
-            r"1",
-            expect![[r#"
-                Root@0..1
-                  Atom@0..1
-                    Number@0..1 "1"
-            "#]],
-        );
-        check(
-            r"#b0",
-            expect![[r##"
-                Root@0..3
-                  Atom@0..3
-                    Number@0..3 "#b0"
-            "##]],
-        );
-        check(
-            r"#B1",
-            expect![[r##"
-                Root@0..3
-                  Atom@0..3
-                    Number@0..3 "#B1"
-            "##]],
-        );
-        check(
-            r"#o0",
-            expect![[r##"
-                Root@0..3
-                  Atom@0..3
-                    Number@0..3 "#o0"
-            "##]],
-        );
-        check(
-            r"#O7",
-            expect![[r##"
-                Root@0..3
-                  Atom@0..3
-                    Number@0..3 "#O7"
-            "##]],
-        );
-        check(
-            r"#d0",
-            expect![[r##"
-                Root@0..3
-                  Atom@0..3
-                    Number@0..3 "#d0"
-            "##]],
-        );
-        check(
-            r"#D9",
-            expect![[r##"
-                Root@0..3
-                  Atom@0..3
-                    Number@0..3 "#D9"
-            "##]],
-        );
-        check(
-            r"#x0",
-            expect![[r##"
-                Root@0..3
-                  Atom@0..3
-                    Number@0..3 "#x0"
-            "##]],
-        );
-        check(
-            r"#XF",
-            expect![[r##"
-                Root@0..3
-                  Atom@0..3
-                    Number@0..3 "#XF"
-            "##]],
-        );
+        check(r"1", expect![[r#"Number@0:0..1 "1""#]]);
+        check(r"#b0", expect![[r##"Number@0:0..3 "#b0""##]]);
+        check(r"#B1", expect![[r##"Number@0:0..3 "#B1""##]]);
+        check(r"#o0", expect![[r##"Number@0:0..3 "#o0""##]]);
+        check(r"#O7", expect![[r##"Number@0:0..3 "#O7""##]]);
+        check(r"#d0", expect![[r##"Number@0:0..3 "#d0""##]]);
+        check(r"#D9", expect![[r##"Number@0:0..3 "#D9""##]]);
+        check(r"#x0", expect![[r##"Number@0:0..3 "#x0""##]]);
+        check(r"#XF", expect![[r##"Number@0:0..3 "#XF""##]]);
     }
 
     #[test]
     fn string() {
-        check(
-            r#""hello""#,
-            expect![[r#"
-                Root@0..7
-                  Atom@0..7
-                    String@0..7 ""hello""
-            "#]],
-        );
+        check(r#""hello""#, expect![[r#"String@0:0..7 "hello""#]]);
         check(
             r#""\a \b \t \n \v \f \r \" \\ \x3bb;""#,
-            expect![[r#"
-                Root@0..35
-                  Atom@0..35
-                    String@0..35 ""\a \b \t \n \v \f \r \" \\ \x3bb;""
-            "#]],
+            expect![[r#"String@0:0..35 "\a \b \t \n \v \f \r \" \\ \x3bb;""#]],
         );
         check(
             "\"\\ \n \"",
             expect![[r#"
-                Root@0..6
-                  Atom@0..6
-                    String@0..6 ""\ 
-                 ""
-            "#]],
+                String@0:0..6 "\ 
+                 ""#]],
         );
     }
 
@@ -868,52 +772,13 @@ mod tests {
     fn identifier() {
         check(
             "hello-world",
-            expect![[r#"
-                Root@0..11
-                  Atom@0..11
-                    Identifier@0..11 "hello-world"
-            "#]],
+            expect![[r#"Identifier@0:0..11 "hello-world""#]],
         );
-        check(
-            "+",
-            expect![[r#"
-                Root@0..1
-                  Atom@0..1
-                    Identifier@0..1 "+"
-            "#]],
-        );
-        check(
-            "-",
-            expect![[r#"
-                Root@0..1
-                  Atom@0..1
-                    Identifier@0..1 "-"
-            "#]],
-        );
-        check(
-            "...",
-            expect![[r#"
-                Root@0..3
-                  Atom@0..3
-                    Identifier@0..3 "..."
-            "#]],
-        );
-        check(
-            "->",
-            expect![[r#"
-                Root@0..2
-                  Atom@0..2
-                    Identifier@0..2 "->"
-            "#]],
-        );
-        check(
-            r"\x3bb;",
-            expect![[r#"
-                Root@0..6
-                  Atom@0..6
-                    Identifier@0..6 "\x3bb;"
-            "#]],
-        );
+        check("+", expect![[r#"Identifier@0:0..1 "+""#]]);
+        check("-", expect![[r#"Identifier@0:0..1 "-""#]]);
+        check("...", expect![[r#"Identifier@0:0..3 "...""#]]);
+        check("->", expect![[r#"Identifier@0:0..2 "->""#]]);
+        check(r"\x3bb;", expect![[r#"Identifier@0:0..6 "\x3bb;""#]]);
     }
 
     #[test]
@@ -921,87 +786,65 @@ mod tests {
         check(
             "'a",
             expect![[r#"
-                Root@0..2
-                  Abbreviation@0..2
-                    Quote@0..1 "'"
-                    Atom@1..1
-                      Identifier@1..2 "a"
-            "#]],
+                Abbreviation@0:0..2
+                  Quote@0:0..1 "'"
+                  Identifier@0:1..1 "a""#]],
         );
         check(
             "`#t",
-            expect![[r##"
-                Root@0..3
-                  Abbreviation@0..3
-                    Backtick@0..1 "`"
-                    Atom@1..2
-                      True@1..3 "#t"
-            "##]],
+            expect![[r#"
+                Abbreviation@0:0..3
+                  Backtick@0:0..1 "`"
+                  True@0:1..2"#]],
         );
         check(
             r",#\a",
             expect![[r##"
-                Root@0..4
-                  Abbreviation@0..4
-                    Comma@0..1 ","
-                    Atom@1..3
-                      Char@1..4 "#\a"
-            "##]],
+                Abbreviation@0:0..4
+                  Comma@0:0..1 ","
+                  Char@0:1..3 "#\a""##]],
         );
         check(
-            ",@1",
+            ",@#f",
             expect![[r#"
-                Root@0..3
-                  Abbreviation@0..3
-                    CommaAt@0..2 ",@"
-                    Atom@2..1
-                      Number@2..3 "1"
-            "#]],
+                Abbreviation@0:0..4
+                  CommaAt@0:0..2 ",@"
+                  False@0:2..2"#]],
         );
         check(
             r#"#'"Hi""#,
             expect![[r##"
-                Root@0..6
-                  Abbreviation@0..6
-                    HashQuote@0..2 "#'"
-                    Atom@2..4
-                      String@2..6 ""Hi""
-            "##]],
+                Abbreviation@0:0..6
+                  HashQuote@0:0..2 "#'"
+                  String@0:2..4 "Hi""##]],
         );
         check(
             "#`()",
             expect![[r##"
-                Root@0..4
-                  Abbreviation@0..4
-                    HashBacktick@0..2 "#`"
-                    List@2..2
-                      OpenDelim@2..3 "("
-                      CloseDelim@3..4 ")"
-            "##]],
+                Abbreviation@0:0..4
+                  HashBacktick@0:0..2 "#`"
+                  List@0:2..2
+                    OpenDelim@0:2..1 "("
+                    CloseDelim@0:3..1 ")""##]],
         );
         check(
             "#,[]",
             expect![[r##"
-                Root@0..4
-                  Abbreviation@0..4
-                    HashComma@0..2 "#,"
-                    List@2..2
-                      OpenDelim@2..3 "["
-                      CloseDelim@3..4 "]"
-            "##]],
+                Abbreviation@0:0..4
+                  HashComma@0:0..2 "#,"
+                  List@0:2..2
+                    OpenDelim@0:2..1 "["
+                    CloseDelim@0:3..1 "]""##]],
         );
         check(
             "#,@(a)",
             expect![[r##"
-                Root@0..6
-                  Abbreviation@0..6
-                    HashCommaAt@0..3 "#,@"
-                    List@3..3
-                      OpenDelim@3..4 "("
-                      Atom@4..1
-                        Identifier@4..5 "a"
-                      CloseDelim@5..6 ")"
-            "##]],
+                Abbreviation@0:0..6
+                  HashCommaAt@0:0..3 "#,@"
+                  List@0:3..3
+                    OpenDelim@0:3..1 "("
+                    Identifier@0:4..1 "a"
+                    CloseDelim@0:5..1 ")""##]],
         );
     }
 
@@ -1010,82 +853,66 @@ mod tests {
         check(
             "()",
             expect![[r#"
-                Root@0..2
-                  List@0..2
-                    OpenDelim@0..1 "("
-                    CloseDelim@1..2 ")"
-            "#]],
+                List@0:0..2
+                  OpenDelim@0:0..1 "("
+                  CloseDelim@0:1..1 ")""#]],
         );
         check(
             "[]",
             expect![[r#"
-                Root@0..2
-                  List@0..2
-                    OpenDelim@0..1 "["
-                    CloseDelim@1..2 "]"
-            "#]],
+                List@0:0..2
+                  OpenDelim@0:0..1 "["
+                  CloseDelim@0:1..1 "]""#]],
         );
         check(
             "(#t)",
-            expect![[r##"
-                Root@0..4
-                  List@0..4
-                    OpenDelim@0..1 "("
-                    Atom@1..2
-                      True@1..3 "#t"
-                    CloseDelim@3..4 ")"
-            "##]],
+            expect![[r#"
+                List@0:0..4
+                  OpenDelim@0:0..1 "("
+                  True@0:1..2
+                  CloseDelim@0:3..1 ")""#]],
         );
         check(
             "(#t . #f)",
-            expect![[r##"
-                Root@0..9
-                  List@0..9
-                    OpenDelim@0..1 "("
-                    Atom@1..2
-                      True@1..3 "#t"
-                    Whitespace@3..4 " "
-                    Dot@4..5 "."
-                    Whitespace@5..6 " "
-                    Atom@6..2
-                      False@6..8 "#f"
-                    CloseDelim@8..9 ")"
-            "##]],
+            expect![[r#"
+                List@0:0..9
+                  OpenDelim@0:0..1 "("
+                  True@0:1..2
+                  Whitespace@0:3..1 " "
+                  Dot@0:4..1
+                  Whitespace@0:5..1 " "
+                  False@0:6..2
+                  CloseDelim@0:8..1 ")""#]],
         );
         check(
-            "(() (#t (#f) [] [3 ]))",
+            r"(() (#t (#f) [] [#\a ]))",
             expect![[r##"
-                Root@0..22
-                  List@0..22
-                    OpenDelim@0..1 "("
-                    List@1..2
-                      OpenDelim@1..2 "("
-                      CloseDelim@2..3 ")"
-                    Whitespace@3..4 " "
-                    List@4..17
-                      OpenDelim@4..5 "("
-                      Atom@5..2
-                        True@5..7 "#t"
-                      Whitespace@7..8 " "
-                      List@8..4
-                        OpenDelim@8..9 "("
-                        Atom@9..2
-                          False@9..11 "#f"
-                        CloseDelim@11..12 ")"
-                      Whitespace@12..13 " "
-                      List@13..2
-                        OpenDelim@13..14 "["
-                        CloseDelim@14..15 "]"
-                      Whitespace@15..16 " "
-                      List@16..4
-                        OpenDelim@16..17 "["
-                        Atom@17..1
-                          Number@17..18 "3"
-                        Whitespace@18..19 " "
-                        CloseDelim@19..20 "]"
-                      CloseDelim@20..21 ")"
-                    CloseDelim@21..22 ")"
-            "##]],
+                List@0:0..24
+                  OpenDelim@0:0..1 "("
+                  List@0:1..2
+                    OpenDelim@0:1..1 "("
+                    CloseDelim@0:2..1 ")"
+                  Whitespace@0:3..1 " "
+                  List@0:4..19
+                    OpenDelim@0:4..1 "("
+                    True@0:5..2
+                    Whitespace@0:7..1 " "
+                    List@0:8..4
+                      OpenDelim@0:8..1 "("
+                      False@0:9..2
+                      CloseDelim@0:11..1 ")"
+                    Whitespace@0:12..1 " "
+                    List@0:13..2
+                      OpenDelim@0:13..1 "["
+                      CloseDelim@0:14..1 "]"
+                    Whitespace@0:15..1 " "
+                    List@0:16..6
+                      OpenDelim@0:16..1 "["
+                      Char@0:17..3 "#\a"
+                      Whitespace@0:20..1 " "
+                      CloseDelim@0:21..1 "]"
+                    CloseDelim@0:22..1 ")"
+                  CloseDelim@0:23..1 ")""##]],
         );
     }
 
@@ -1094,43 +921,33 @@ mod tests {
         check(
             "#()",
             expect![[r##"
-                Root@0..3
-                  Vector@0..3
-                    SpecialOpenDelim@0..2 "#("
-                    CloseDelim@2..3 ")"
-            "##]],
+                Vector@0:0..3
+                  OpenDelim@0:0..2 "#("
+                  CloseDelim@0:2..1 ")""##]],
         );
-
         check(
             "#vu8()",
             expect![[r##"
-                Root@0..6
-                  Bytevector@0..6
-                    SpecialOpenDelim@0..5 "#vu8("
-                    CloseDelim@5..6 ")"
-            "##]],
+                Bytevector@0:0..6
+                  OpenDelim@0:0..5 "#vu8("
+                  CloseDelim@0:5..1 ")""##]],
         );
-
         check(
-            "#(1 #() #(#t))",
+            r"#(#\a #() #(#t))",
             expect![[r##"
-                Root@0..14
-                  Vector@0..14
-                    SpecialOpenDelim@0..2 "#("
-                    Atom@2..1
-                      Number@2..3 "1"
-                    Whitespace@3..4 " "
-                    Vector@4..3
-                      SpecialOpenDelim@4..6 "#("
-                      CloseDelim@6..7 ")"
-                    Whitespace@7..8 " "
-                    Vector@8..5
-                      SpecialOpenDelim@8..10 "#("
-                      Atom@10..2
-                        True@10..12 "#t"
-                      CloseDelim@12..13 ")"
-                    CloseDelim@13..14 ")"
-            "##]],
+                Vector@0:0..16
+                  OpenDelim@0:0..2 "#("
+                  Char@0:2..3 "#\a"
+                  Whitespace@0:5..1 " "
+                  Vector@0:6..3
+                    OpenDelim@0:6..2 "#("
+                    CloseDelim@0:8..1 ")"
+                  Whitespace@0:9..1 " "
+                  Vector@0:10..5
+                    OpenDelim@0:10..2 "#("
+                    True@0:12..2
+                    CloseDelim@0:14..1 ")"
+                  CloseDelim@0:15..1 ")""##]],
         );
     }
 
@@ -1145,10 +962,7 @@ mod tests {
                     .msg("unexpected closing delimiter")
                     .span(Span::new(FileId::default(), 0, 1))
                     .finish()],
-                expect![[r#"
-                    Root@0..1
-                      CloseDelim@0..1 ")"
-                "#]],
+                expect![[r#"CloseDelim@0:0..1 ")""#]],
             );
 
             check_error(
@@ -1164,10 +978,8 @@ mod tests {
                         .finish()])
                     .finish()],
                 expect![[r#"
-                    Root@0..1
-                      List@0..1
-                        OpenDelim@0..1 "("
-                "#]],
+                    List@0:0..1
+                      OpenDelim@0:0..1 "(""#]],
             );
         }
 
@@ -1185,11 +997,9 @@ mod tests {
                         .finish()])
                     .finish()],
                 expect![[r#"
-                    Root@0..2
-                      List@0..2
-                        OpenDelim@0..1 "{"
-                        CloseDelim@1..2 "}"
-                "#]],
+                    List@0:0..2
+                      OpenDelim@0:0..1 "{"
+                      CloseDelim@0:1..1 "}""#]],
             );
         }
 
@@ -1202,11 +1012,7 @@ mod tests {
                     .msg("expected a character, found <eof>")
                     .span(Span::new(FileId::default(), 0, 2))
                     .finish()],
-                expect![[r##"
-                    Root@0..2
-                      Atom@0..2
-                        Char@0..2 "#\"
-                "##]],
+                expect![[r##"Char@0:0..2 "#\""##]],
             );
 
             check_error(
@@ -1216,11 +1022,7 @@ mod tests {
                     .msg("invalid character name")
                     .span(Span::new(FileId::default(), 0, 7))
                     .finish()],
-                expect![[r##"
-                    Root@0..7
-                      Atom@0..7
-                        Char@0..7 "#\Space"
-                "##]],
+                expect![[r##"Char@0:0..7 "#\Space""##]],
             );
 
             check_error(
@@ -1230,11 +1032,7 @@ mod tests {
                     .msg("invalid character name")
                     .span(Span::new(FileId::default(), 0, 19))
                     .finish()],
-                expect![[r##"
-                    Root@0..19
-                      Atom@0..19
-                        Char@0..19 "#\INVALID-CHAR-NAME"
-                "##]],
+                expect![[r##"Char@0:0..19 "#\INVALID-CHAR-NAME""##]],
             );
 
             check_error(
@@ -1244,11 +1042,7 @@ mod tests {
                     .msg("invalid unicode hex escape sequence")
                     .span(Span::new(FileId::default(), 0, 7))
                     .finish()],
-                expect![[r##"
-                    Root@0..7
-                      Atom@0..7
-                        Char@0..7 "#\xd800"
-                "##]],
+                expect![[r##"Char@0:0..7 "#\xd800""##]],
             );
 
             check_error(
@@ -1258,11 +1052,7 @@ mod tests {
                     .msg("invalid unicode hex escape sequence")
                     .span(Span::new(FileId::default(), 0, 7))
                     .finish()],
-                expect![[r##"
-                    Root@0..7
-                      Atom@0..7
-                        Char@0..7 "#\xdfff"
-                "##]],
+                expect![[r##"Char@0:0..7 "#\xdfff""##]],
             );
 
             check_error(
@@ -1272,11 +1062,7 @@ mod tests {
                     .msg("invalid unicode hex escape sequence")
                     .span(Span::new(FileId::default(), 0, 9))
                     .finish()],
-                expect![[r##"
-                    Root@0..9
-                      Atom@0..9
-                        Char@0..9 "#\x110000"
-                "##]],
+                expect![[r##"Char@0:0..9 "#\x110000""##]],
             );
 
             check_error(
@@ -1286,11 +1072,7 @@ mod tests {
                     .msg("invalid hex scalar value")
                     .span(Span::new(FileId::default(), 0, 9))
                     .finish()],
-                expect![[r##"
-                    Root@0..9
-                      Atom@0..9
-                        Char@0..9 "#\xQWERTY"
-                "##]],
+                expect![[r##"Char@0:0..9 "#\xQWERTY""##]],
             );
         }
 
@@ -1303,11 +1085,7 @@ mod tests {
                     .msg("identifiers cannot begin with +")
                     .span(Span::new(FileId::default(), 0, 2))
                     .finish()],
-                expect![[r##"
-                    Root@0..2
-                      Atom@0..2
-                        Identifier@0..2 "+a"
-                "##]],
+                expect![[r##"Identifier@0:0..2 "+a""##]],
             );
 
             check_error(
@@ -1317,11 +1095,7 @@ mod tests {
                     .msg("identifiers cannot begin with -")
                     .span(Span::new(FileId::default(), 0, 2))
                     .finish()],
-                expect![[r##"
-                    Root@0..2
-                      Atom@0..2
-                        Identifier@0..2 "-a"
-                "##]],
+                expect![[r##"Identifier@0:0..2 "-a""##]],
             );
 
             check_error(
@@ -1331,11 +1105,7 @@ mod tests {
                     .msg("identifiers cannot begin with .")
                     .span(Span::new(FileId::default(), 0, 2))
                     .finish()],
-                expect![[r##"
-                    Root@0..2
-                      Atom@0..2
-                        Identifier@0..2 ".."
-                "##]],
+                expect![[r##"Identifier@0:0..2 "..""##]],
             );
 
             check_error(
@@ -1345,11 +1115,7 @@ mod tests {
                     .msg("invalid hex scalar value")
                     .span(Span::new(FileId::default(), 1, 6))
                     .finish()],
-                expect![[r##"
-                    Root@0..10
-                      Atom@0..10
-                        Identifier@0..10 "h\xq65;llo"
-                "##]],
+                expect![[r##"Identifier@0:0..10 "h\xq65;llo""##]],
             );
 
             check_error(
@@ -1366,11 +1132,7 @@ mod tests {
                         .span(Span::new(FileId::default(), 6, 4))
                         .finish(),
                 ],
-                expect![[r##"
-                    Root@0..12
-                      Atom@0..12
-                        Identifier@0..12 "h\xp;l\xq;lo"
-                "##]],
+                expect![[r##"Identifier@0:0..12 "h\xp;l\xq;lo""##]],
             );
 
             check_error(
@@ -1380,11 +1142,7 @@ mod tests {
                     .msg("unterminated hex escape sequence")
                     .span(Span::new(FileId::default(), 0, 5))
                     .finish()],
-                expect![[r##"
-                    Root@0..5
-                      Atom@0..5
-                        Identifier@0..5 "\x3bb"
-                "##]],
+                expect![[r##"Identifier@0:0..5 "\x3bb""##]],
             );
         }
 
@@ -1398,11 +1156,7 @@ mod tests {
                     .msg("invalid escape character")
                     .span(Span::new(FileId::default(), 1, 2))
                     .finish()],
-                expect![[r##"
-                    Root@0..4
-                      Atom@0..4
-                        Identifier@0..4 ""\q""
-                "##]],
+                expect![[r##"Identifier@0..4 ""\q"""##]],
             );
         }
     }
@@ -1413,7 +1167,14 @@ mod tests {
         fn check(input: &str, expected: Expect) {
             let result = parse_str_with_config(input, FileId::default(), ParserConfig::extended());
             assert_eq!(Vec::<Diagnostic>::default(), result.diagnostics);
-            expected.assert_debug_eq(&result.tree);
+            expected.assert_eq(
+                &result
+                    .root
+                    .into_iter()
+                    .map(|c| format!("{c:#?}"))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            );
         }
 
         #[test]
@@ -1421,11 +1182,136 @@ mod tests {
             check(
                 "{}",
                 expect![[r#"
-                    Root@0..2
-                      List@0..2
-                        OpenDelim@0..1 "{"
-                        CloseDelim@1..2 "}"
-                "#]],
+                    List@0:0..2
+                      OpenDelim@0:0..1 "{"
+                      CloseDelim@0:1..1 "}""#]],
+            );
+        }
+    }
+
+    mod comments {
+        use super::*;
+
+        #[test]
+        fn single_line() {
+            check(
+                ";hello world",
+                expect![[r#"SingleComment@0:0..12 ";hello world""#]],
+            );
+            check(
+                ";hi\n3",
+                expect![[r#"
+                    SingleComment@0:0..4 ";hi
+                    "
+                    Number@0:4..1 "3""#]],
+            );
+            check(
+                ";hi\n;hello",
+                expect![[r#"
+                    SingleComment@0:0..4 ";hi
+                    "
+                    SingleComment@0:4..6 ";hello""#]],
+            );
+        }
+
+        #[test]
+        fn multi_line() {
+            check(
+                "#| hello |#",
+                expect![[r##"MultiComment@0:0..11 "#| hello |#""##]],
+            );
+            check(
+                "#| hello #| there |# general #| kenobi |#|#",
+                expect![[
+                    r##"MultiComment@0:0..43 "#| hello #| there |# general #| kenobi |#|#""##
+                ]],
+            );
+            check(
+                "(3 #| hi |# 4)",
+                expect![[r##"
+                    List@0:0..14
+                      OpenDelim@0:0..1 "("
+                      Number@0:1..1 "3"
+                      Whitespace@0:2..1 " "
+                      MultiComment@0:3..8 "#| hi |#"
+                      Whitespace@0:11..1 " "
+                      Number@0:12..1 "4"
+                      CloseDelim@0:13..1 ")""##]],
+            );
+        }
+
+        #[test]
+        fn datum() {
+            check(
+                "#;3",
+                expect![[r#"
+                    DatumComment@0:0..3
+                      HashSemicolon@0:0..2
+                      Number@0:2..1 "3""#]],
+            );
+            check(
+                r"#;3 #\a",
+                expect![[r##"
+                    DatumComment@0:0..3
+                      HashSemicolon@0:0..2
+                      Number@0:2..1 "3"
+                    Whitespace@0:3..1 " "
+                    Char@0:4..3 "#\a""##]],
+            );
+            check(
+                "#;() 3",
+                expect![[r#"
+                    DatumComment@0:0..4
+                      HashSemicolon@0:0..2
+                      List@0:2..2
+                        OpenDelim@0:2..1 "("
+                        CloseDelim@0:3..1 ")"
+                    Whitespace@0:4..1 " "
+                    Number@0:5..1 "3""#]],
+            );
+            check(
+                "#;(3 #;4) 3",
+                expect![[r#"
+                    DatumComment@0:0..9
+                      HashSemicolon@0:0..2
+                      List@0:2..7
+                        OpenDelim@0:2..1 "("
+                        Number@0:3..1 "3"
+                        Whitespace@0:4..1 " "
+                        DatumComment@0:5..3
+                          HashSemicolon@0:5..2
+                          Number@0:7..1 "4"
+                        CloseDelim@0:8..1 ")"
+                    Whitespace@0:9..1 " "
+                    Number@0:10..1 "3""#]],
+            );
+            check(
+                "#;#(3) 3",
+                expect![[r##"
+                    DatumComment@0:0..6
+                      HashSemicolon@0:0..2
+                      Vector@0:2..4
+                        OpenDelim@0:2..2 "#("
+                        Number@0:4..1 "3"
+                        CloseDelim@0:5..1 ")"
+                    Whitespace@0:6..1 " "
+                    Number@0:7..1 "3""##]],
+            );
+        }
+
+        #[test]
+        fn combination() {
+            check(
+                "#;(3 #|hi|#)",
+                expect![[r##"
+                    DatumComment@0:0..12
+                      HashSemicolon@0:0..2
+                      List@0:2..10
+                        OpenDelim@0:2..1 "("
+                        Number@0:3..1 "3"
+                        Whitespace@0:4..1 " "
+                        MultiComment@0:5..6 "#|hi|#"
+                        CloseDelim@0:11..1 ")""##]],
             );
         }
     }
