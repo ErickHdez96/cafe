@@ -32,31 +32,38 @@ pub fn import(
     mut source: SynList,
     span: Span,
     env: &mut BEnv,
-) -> ast::ModId {
-    let CstKind::List(l, ListKind::List) = &source.nth(1).unwrap().kind else {
-        todo!()
-    };
+) -> Vec<ast::ModId> {
+    source.next();
+    let mut mids = vec![];
+
+    for cst in source.by_ref() {
+        let CstKind::List(l, ListKind::List) = &cst.kind else {
+            todo!()
+        };
+
+        let mid = parse_module_name(expander, Source::new(l.clone()));
+
+        match expander.import(mid) {
+            Ok(i) => {
+                for (v, b) in i.bindings.bindings() {
+                    if env.has_immediate(v) {
+                        todo!()
+                    } else {
+                        env.insert(v.clone(), b.clone());
+                    }
+                }
+            }
+            Err(d) => {
+                expander.diagnostics.push(d);
+            }
+        }
+        mids.push(mid);
+    }
 
     assert!(source.next().is_none());
     assert!(source.dot().next().is_none());
 
-    let mid = parse_module_name(expander, Source::new(l.clone()));
-
-    match expander.import(mid) {
-        Ok(i) => {
-            for (v, b) in i.bindings.bindings() {
-                if env.has_immediate(v) {
-                    todo!()
-                } else {
-                    env.insert(v.clone(), b.clone());
-                }
-            }
-        }
-        Err(d) => {
-            expander.diagnostics.push(d);
-        }
-    }
-    mid
+    mids
 }
 
 pub fn module(

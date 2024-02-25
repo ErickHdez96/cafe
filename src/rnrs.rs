@@ -1,8 +1,11 @@
+use std::rc::Rc;
+
 use crate::{
     env::Env,
     expander::{self, binding::Binding, scopes::Scopes},
     span::Span,
     syntax::ast,
+    ty::Ty,
 };
 
 pub fn core_expander_interface() -> ast::ModuleInterface {
@@ -47,6 +50,102 @@ pub fn core_expander_interface() -> ast::ModuleInterface {
             ),
         ]),
         types: Some(Env::default()),
+        dependencies: vec![],
+    }
+}
+
+pub fn intrinsics_interface() -> ast::ModuleInterface {
+    let mid = ast::ModuleName::from_strings(vec!["rnrs", "intrinsics"]);
+    let object = Rc::new(Ty::SObject);
+
+    ast::ModuleInterface {
+        id: mid,
+        span: Span::dummy(),
+        bindings: Env::from_iter(vec![
+            (
+                "+".into(),
+                Binding::Value {
+                    scopes: Scopes::core(),
+                    name: "+".into(),
+                    orig_module: mid,
+                },
+            ),
+            (
+                "-".into(),
+                Binding::Value {
+                    scopes: Scopes::core(),
+                    name: "-".into(),
+                    orig_module: mid,
+                },
+            ),
+            (
+                "*".into(),
+                Binding::Value {
+                    scopes: Scopes::core(),
+                    name: "*".into(),
+                    orig_module: mid,
+                },
+            ),
+            (
+                "/".into(),
+                Binding::Value {
+                    scopes: Scopes::core(),
+                    name: "/".into(),
+                    orig_module: mid,
+                },
+            ),
+            (
+                "=".into(),
+                Binding::Value {
+                    scopes: Scopes::core(),
+                    name: "=".into(),
+                    orig_module: mid,
+                },
+            ),
+            (
+                "<".into(),
+                Binding::Value {
+                    scopes: Scopes::core(),
+                    name: "<".into(),
+                    orig_module: mid,
+                },
+            ),
+            (
+                "<=".into(),
+                Binding::Value {
+                    scopes: Scopes::core(),
+                    name: "<=".into(),
+                    orig_module: mid,
+                },
+            ),
+            (
+                ">".into(),
+                Binding::Value {
+                    scopes: Scopes::core(),
+                    name: ">".into(),
+                    orig_module: mid,
+                },
+            ),
+            (
+                ">=".into(),
+                Binding::Value {
+                    scopes: Scopes::core(),
+                    name: ">=".into(),
+                    orig_module: mid,
+                },
+            ),
+        ]),
+        types: Some(Env::from_iter(vec![
+            ("+".into(), Rc::clone(&object)),
+            ("-".into(), Rc::clone(&object)),
+            ("*".into(), Rc::clone(&object)),
+            ("/".into(), Rc::clone(&object)),
+            ("=".into(), Rc::clone(&object)),
+            ("<".into(), Rc::clone(&object)),
+            ("<=".into(), Rc::clone(&object)),
+            (">".into(), Rc::clone(&object)),
+            (">=".into(), Rc::clone(&object)),
+        ])),
         dependencies: vec![],
     }
 }

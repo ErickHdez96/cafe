@@ -10,7 +10,7 @@ use crate::{
         ExpanderResult, ExpanderResultMod,
     },
     file::{FileId, SourceFile},
-    rnrs::core_expander_interface,
+    rnrs::{core_expander_interface, intrinsics_interface},
     syntax::{
         ast::{ModId, Module, ModuleInterface, ModuleName},
         cst::Cst,
@@ -46,13 +46,19 @@ impl Compiler {
             diagnostics: RefCell::default(),
         };
         s.feed_module(core_expander_interface());
+        s.feed_module(intrinsics_interface());
         s
     }
 
     fn import_module_id(&self, mid: ModId) -> Res<Rc<ModuleInterface>> {
-        match self.store.borrow().get_mod_interface(mid) {
+        match self.get_mod_interface(mid) {
             Some(m) => Ok(m),
-            None => todo!("tried to import new module {}", mid.resolve()),
+            None => {
+                let mod_ = self.expand_module(mid)?;
+                self.feed_module(mod_.to_interface());
+                self.get_mod_interface(mid)
+                    .ok_or_else(|| panic!("should have stored module interface"))
+            }
         }
     }
 
@@ -65,22 +71,34 @@ impl Compiler {
     }
 
     fn resolve_module_name(&self, mid: ModId) -> Res<FileId> {
-        match self.store.borrow().get_module_file(mid) {
+        match self.get_module_file(mid) {
             Some(fid) => Ok(fid),
-            None => todo!("tried to resolve unknown module {}", mid.resolve()),
+            None => {
+                let mut path = std::env::current_dir().unwrap();
+                let mod_paths = mid.resolve().paths.join(std::path::MAIN_SEPARATOR_STR);
+                path.push(mod_paths);
+                path.set_extension("scm");
+                if path.exists() {
+                    self.feed_file(mid, path)
+                } else {
+                    todo!(
+                        "tried to resolve unknown module {} - {}",
+                        mid.resolve(),
+                        path.to_string_lossy()
+                    )
+                }
+            }
         }
     }
 
     fn module_deps(&self, mid: ModId) -> Vec<ModId> {
-        self.store
-            .borrow()
-            .get_mod_interface(mid)
+        self.get_mod_interface(mid)
             .map(|i| i.dependencies.clone())
             .unwrap()
     }
 
     pub fn file(&self, file_id: FileId) -> Option<Rc<SourceFile>> {
-        self.store.borrow().get_file(file_id)
+        self.get_file(file_id)
     }
 
     pub fn feed_file(&self, mid: ModId, path: impl AsRef<path::Path>) -> Res<FileId> {
@@ -122,10 +140,7 @@ impl Compiler {
     }
 
     pub fn pass_parse(&self, file_id: FileId) -> ParseResult {
-        parse_source_file(
-            &self.store.borrow().get_file(file_id).unwrap(),
-            self.config.parser,
-        )
+        parse_source_file(&self.get_file(file_id).unwrap(), self.config.parser)
     }
 
     pub fn pass_expand(&self, root: Vec<Rc<Cst>>, file_id: FileId) -> ExpanderResult {
@@ -153,7 +168,7 @@ impl Compiler {
     }
 
     pub fn expand_module(&self, mid: ModId) -> Res<Rc<Module>> {
-        if let Some(mod_) = self.store.borrow().get_mod(mid) {
+        if let Some(mod_) = self.get_mod(mid) {
             return Ok(mod_);
         }
 
@@ -168,6 +183,13 @@ impl Compiler {
                 ..
             }) => {
                 self.diagnostics.borrow_mut().extend(diagnostics);
+                let mid = if self.get_mod(mid).is_some() {
+                    let mut paths = mid.resolve().paths.clone();
+                    paths.push(String::from("#script"));
+                    ModuleName::from_strings(paths)
+                } else {
+                    mid
+                };
                 let mut store = self.store.borrow_mut();
                 store
                     .module_interfaces
@@ -178,17 +200,17 @@ impl Compiler {
                 self.diagnostics.borrow_mut().extend(diagnostics);
             }
         }
-        Ok(self.store.borrow().get_mod(mid).unwrap())
+        Ok(self.get_mod(mid).unwrap())
     }
 
     fn run_typecheck_module(&self, mid: ModId) -> Res<()> {
-        if let Some(mod_) = self.store.borrow().get_mod(mid) {
+        if let Some(mod_) = self.get_mod(mid) {
             if mod_.types.is_some() {
                 return Ok(());
             }
         }
 
-        if let Some(imod) = self.store.borrow().get_mod_interface(mid) {
+        if let Some(imod) = self.get_mod_interface(mid) {
             if imod.types.is_some() {
                 return Ok(());
             }
@@ -218,10 +240,7 @@ impl Compiler {
 
     pub fn typecheck_module(&self, mid: ModId) -> Res<Rc<Module>> {
         self.run_typecheck_module(mid)?;
-        self.store
-            .borrow()
-            .get_mod(mid)
-            .ok_or_else(|| panic!("expected module"))
+        self.get_mod(mid).ok_or_else(|| panic!("expected module"))
     }
 
     pub fn compile_script(&self, path: impl AsRef<path::Path>) -> Res<Rc<Module>> {
@@ -246,6 +265,22 @@ impl Compiler {
         //}
 
         //m
+    }
+
+    fn get_mod(&self, mid: ModId) -> Option<Rc<Module>> {
+        self.store.borrow().get_mod(mid)
+    }
+
+    fn get_mod_interface(&self, mid: ModId) -> Option<Rc<ModuleInterface>> {
+        self.store.borrow().get_mod_interface(mid)
+    }
+
+    fn get_file(&self, fid: FileId) -> Option<Rc<SourceFile>> {
+        self.store.borrow().get_file(fid)
+    }
+
+    fn get_module_file(&self, mid: ModId) -> Option<FileId> {
+        self.store.borrow().get_module_file(mid)
     }
 }
 

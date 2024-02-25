@@ -147,7 +147,7 @@ impl fmt::Debug for Path {
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Item {
-    Import(ModId, Span),
+    Import(Vec<ModId>, Span),
     Mod(ModId, Span),
     Define(Define),
     Expr(Expr),
@@ -196,7 +196,14 @@ impl fmt::Debug for Item {
                 Item::Import(mid, span) => {
                     let width = f.width().unwrap_or_default();
                     let padding = " ".repeat(width);
-                    write!(f, "{padding}{{import {}@{span}}}", mid.resolve(),)
+                    write!(
+                        f,
+                        "{padding}{{import {}@{span}}}",
+                        mid.iter()
+                            .map(|m| format!("{}", m.resolve()))
+                            .collect::<Vec<_>>()
+                            .join(" "),
+                    )
                 }
                 Item::Mod(mid, span) => {
                     let width = f.width().unwrap_or_default();

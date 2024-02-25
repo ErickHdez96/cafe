@@ -239,7 +239,7 @@ impl Expander<'_> {
                             source
                                 .map(|c| match self.expand_cst(c, env) {
                                     Item::Expr(e) => e,
-                                    _ => todo!(),
+                                    r => todo!("{r:?}"),
                                 })
                                 .collect(),
                         ),
