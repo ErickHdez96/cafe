@@ -155,7 +155,6 @@ pub fn lambda_transformer(
     span: Span,
     env: &mut BEnv,
 ) -> ast::Item {
-    dbg!(&source.source);
     let mut env = env.enter();
     let (formals, rest) = formals_transformer(expander, source.nth(1).unwrap());
     for f in &formals {

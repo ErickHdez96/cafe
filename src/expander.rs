@@ -166,6 +166,7 @@ impl Expander<'_> {
                     span,
                     kind: ast::ExprKind::Body(items),
                 },
+                types: None,
             },
             diagnostics: std::mem::take(&mut self.diagnostics),
         }
@@ -514,6 +515,7 @@ mod tests {
                         exports: core_env(),
                         bindings: Env::default(),
                         body: ast::Expr::dummy(),
+                        types: None,
                     },
                 )])),
             }

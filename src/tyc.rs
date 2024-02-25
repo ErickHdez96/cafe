@@ -1,7 +1,11 @@
 use std::rc::Rc;
 
 use crate::{
-    diagnostics::Diagnostic, env::Env, new_syntax::ast, ty::{BuiltinTys, Ty, TyCo}, utils::Resolve
+    diagnostics::Diagnostic,
+    env::Env,
+    syntax::ast,
+    ty::{BuiltinTys, Ty, TyCo},
+    utils::Resolve,
 };
 
 type TyCoEnv<'tyc> = Env<'tyc, String, TyCo>;
@@ -32,25 +36,30 @@ impl TypeChecker<'_> {
     fn mod_(&mut self, mod_: &ast::Module) -> Env<'static, String, Rc<Ty>> {
         let mut tys = Env::default();
 
-        let ExprKind::LetRec { defs, exprs } = &mod_.body.kind else {
+        let ast::ExprKind::Body(body) = &mod_.body.kind else {
             panic!(
                 "expected a letrec as the body of a module: {:#?}",
                 mod_.body
             );
         };
 
-        for def in defs {
-            tys.insert(
-                def.name.value.clone(),
-                TyCo::Union(vec![match &def.expr {
-                    Some(e) => self.expr(e, &tys),
-                    None => Rc::clone(&self.builtins.uninit),
-                }]),
-            );
-        }
-
-        for exp in exprs {
-            self.expr(exp, &tys);
+        for item in body {
+            match item {
+                ast::Item::Import(_, _) => {}
+                ast::Item::Mod(_, _) => {}
+                ast::Item::Define(d) => {
+                    tys.insert(
+                        d.name.value.clone(),
+                        TyCo::Ty(Rc::clone(&self.builtins.object)),
+                    );
+                    if let Some(e) = &d.expr {
+                        self.expr(e, &tys);
+                    }
+                }
+                ast::Item::Expr(e) => {
+                    self.expr(e, &tys);
+                }
+            }
         }
 
         tys.into_bindings()
@@ -59,9 +68,33 @@ impl TypeChecker<'_> {
             .collect::<Env<'_, _, _>>()
     }
 
-    fn expr(&mut self, expr: &Expr, tyenv: &TyCoEnv) -> Rc<Ty> {
+    fn expr(&mut self, expr: &ast::Expr, tyenv: &TyCoEnv) -> Rc<Ty> {
         match &expr.kind {
-            ExprKind::LetRec { defs, exprs } => {
+            ast::ExprKind::Body(body) => {
+                let mut tyenv = tyenv.enter();
+                let mut ret = Rc::clone(&self.builtins.void);
+                for item in body {
+                    match item {
+                        ast::Item::Import(_, _) => {}
+                        ast::Item::Mod(_, _) => {}
+                        ast::Item::Define(d) => {
+                            tyenv.insert(
+                                d.name.value.clone(),
+                                TyCo::Ty(Rc::clone(&self.builtins.object)),
+                            );
+                            if let Some(e) = &d.expr {
+                                self.expr(e, &tyenv);
+                            }
+                            ret = Rc::clone(&self.builtins.void);
+                        }
+                        ast::Item::Expr(e) => {
+                            ret = self.expr(e, &tyenv);
+                        }
+                    }
+                }
+                ret
+            }
+            ast::ExprKind::Let { defs, exprs, .. } => {
                 for _d in defs {
                     todo!()
                 }
@@ -71,18 +104,23 @@ impl TypeChecker<'_> {
                 }
                 ret.unwrap()
             }
-            ExprKind::Quote(_) => Rc::clone(&self.builtins.object),
-            ExprKind::If(_, _, _) => Rc::clone(&self.builtins.object),
-            ExprKind::Lambda {
+            ast::ExprKind::Quote(_) => Rc::clone(&self.builtins.object),
+            ast::ExprKind::If(cond, r#true, r#false) => {
+                self.expr(cond, tyenv);
+                self.expr(r#true, tyenv);
+                self.expr(r#false, tyenv);
+                Rc::clone(&self.builtins.object)
+            }
+            ast::ExprKind::Lambda {
                 formals,
                 rest,
                 expr,
             } => self.lambda(formals, rest.as_ref(), expr, tyenv),
-            ExprKind::List(_) => Rc::clone(&self.builtins.object),
-            ExprKind::DottedList(_, _) => Rc::clone(&self.builtins.object),
-            ExprKind::Boolean(_) => Rc::clone(&self.builtins.boolean),
-            ExprKind::Char(_) => Rc::clone(&self.builtins.char),
-            ExprKind::Var(v) => match self.resolve(v, tyenv) {
+            ast::ExprKind::List(_) => Rc::clone(&self.builtins.object),
+            ast::ExprKind::DottedList(_, _) => Rc::clone(&self.builtins.object),
+            ast::ExprKind::Boolean(_) => Rc::clone(&self.builtins.boolean),
+            ast::ExprKind::Char(_) => Rc::clone(&self.builtins.char),
+            ast::ExprKind::Var(v) => match self.resolve(v, tyenv) {
                 Some(v) => v.clone().into(),
                 None => {
                     self.diagnostics.push(
@@ -94,23 +132,24 @@ impl TypeChecker<'_> {
                     Rc::clone(&self.builtins.object)
                 }
             },
-            ExprKind::Error(_) => Rc::clone(&self.builtins.boolean),
-            ExprKind::Void => Rc::clone(&self.builtins.void),
-            ExprKind::Begin(exprs) => {
+            ast::ExprKind::Error(_) => Rc::clone(&self.builtins.object),
+            ast::ExprKind::Void => Rc::clone(&self.builtins.void),
+            ast::ExprKind::Begin(exprs) => {
                 let mut ret = None;
                 for e in exprs {
                     ret = Some(self.expr(e, tyenv));
                 }
                 ret.unwrap()
             }
+            ast::ExprKind::Number(_) => Rc::clone(&self.builtins.object),
         }
     }
 
     fn lambda(
         &mut self,
-        formals: &[Ident],
-        rest: Option<&Ident>,
-        expr: &Expr,
+        formals: &[ast::Ident],
+        rest: Option<&ast::Ident>,
+        expr: &ast::Expr,
         tyenv: &TyCoEnv,
     ) -> Rc<Ty> {
         let mut tyenv = tyenv.enter();
@@ -133,7 +172,7 @@ impl TypeChecker<'_> {
         })
     }
 
-    fn resolve<'s>(&'s self, var: &Path, tyenv: &'s TyCoEnv) -> Option<TyCo> {
+    fn resolve<'s>(&'s self, var: &ast::Path, tyenv: &'s TyCoEnv) -> Option<TyCo> {
         if self.module == var.module {
             tyenv.get(&var.value).cloned()
         } else {
@@ -181,7 +220,7 @@ mod tests {
         check(
             "(import (rnrs expander core))
              (define a #t)",
-            expect!["a: boolean"],
+            expect!["a: object"],
         );
     }
 
@@ -190,7 +229,7 @@ mod tests {
         check(
             r"(import (rnrs expander core))
               (define a #\λ)",
-            expect!["a: char"],
+            expect!["a: object"],
         );
     }
 
@@ -199,7 +238,7 @@ mod tests {
         check(
             r"(import (rnrs expander core))
               (define a (lambda (x) x))",
-            expect!["a: (-> '0 '0)"],
+            expect!["a: object"],
         );
     }
 }

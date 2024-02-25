@@ -10,5 +10,5 @@ pub mod rnrs;
 pub mod span;
 pub mod syntax;
 pub mod ty;
-//pub mod tyc;
+pub mod tyc;
 mod utils;

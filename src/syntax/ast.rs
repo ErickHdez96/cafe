@@ -24,7 +24,7 @@ pub struct Module {
     pub exports: Env<'static, String, Binding>,
     /// All the root bindings (e.g. macro, value) of the module.
     pub bindings: Env<'static, String, Binding>,
-    //pub types: Option<Env<'static, String, Rc<Ty>>>,
+    pub types: Option<Env<'static, String, Rc<Ty>>>,
     pub body: Expr,
 }
 

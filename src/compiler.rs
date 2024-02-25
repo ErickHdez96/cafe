@@ -16,8 +16,9 @@ use crate::{
         cst::Cst,
         parser::{parse_source_file, ParseResult},
     },
-    ty::BuiltinTys,
-    utils::Resolve, //tyc::typecheck_module,
+    ty::{BuiltinTys, Ty},
+    tyc::typecheck_module,
+    utils::Resolve,
 };
 
 pub type Res<T> = Result<T, Diagnostic>;
@@ -66,7 +67,7 @@ impl Compiler {
     fn resolve_module_name(&self, mid: ModId) -> Res<FileId> {
         match self.store.borrow().get_module_file(mid) {
             Some(fid) => Ok(fid),
-            None => todo!(),
+            None => todo!("tried to resolve unknown module {}", mid.resolve()),
         }
     }
 
@@ -138,20 +139,24 @@ impl Compiler {
         ))
     }
 
-    //pub fn pass_typecheck(&self, mod_: &Module) -> Env<'static, String, Rc<Ty>> {
-    //    let (res, diags) = typecheck_module(mod_, self.store.borrow().builtin_tys.clone(), |mid| {
-    //        self.store
-    //            .borrow()
-    //            .module_interfaces
-    //            .get(&mid)
-    //            .map(Rc::clone)
-    //            .unwrap()
-    //    });
-    //    self.diagnostics.borrow_mut().extend(diags);
-    //    res
-    //}
+    pub fn pass_typecheck(&self, mod_: &Module) -> Env<'static, String, Rc<Ty>> {
+        let (res, diags) = typecheck_module(mod_, self.store.borrow().builtin_tys.clone(), |mid| {
+            self.store
+                .borrow()
+                .module_interfaces
+                .get(&mid)
+                .map(Rc::clone)
+                .unwrap()
+        });
+        self.diagnostics.borrow_mut().extend(diags);
+        res
+    }
 
     pub fn expand_module(&self, mid: ModId) -> Res<Rc<Module>> {
+        if let Some(mod_) = self.store.borrow().get_mod(mid) {
+            return Ok(mod_);
+        }
+
         let fid = self.resolve_module_name(mid)?;
         let pres = self.pass_parse(fid);
         self.diagnostics.borrow_mut().extend(pres.diagnostics);
@@ -176,34 +181,59 @@ impl Compiler {
         Ok(self.store.borrow().get_mod(mid).unwrap())
     }
 
-    //pub fn typecheck_module(&self, mid: ModId) -> Res<Rc<Module>> {
-    //    let env = {
-    //        let module = self.expand_module(mid)?;
-    //        self.pass_typecheck(&module)
-    //    };
-    //    Rc::get_mut(
-    //        self.store
-    //            .borrow_mut()
-    //            .module_interfaces
-    //            .get_mut(&mid)
-    //            .unwrap(),
-    //    )
-    //    .unwrap()
-    //    .types = Some(env.clone());
-    //    Rc::get_mut(self.store.borrow_mut().modules.get_mut(&mid).unwrap())
-    //        .unwrap()
-    //        .types = Some(env);
-    //    Ok(self.store.borrow().get_mod(mid).unwrap())
-    //}
+    fn run_typecheck_module(&self, mid: ModId) -> Res<()> {
+        if let Some(mod_) = self.store.borrow().get_mod(mid) {
+            if mod_.types.is_some() {
+                return Ok(());
+            }
+        }
+
+        if let Some(imod) = self.store.borrow().get_mod_interface(mid) {
+            if imod.types.is_some() {
+                return Ok(());
+            }
+        }
+
+        let env = {
+            let module = self.expand_module(mid)?;
+            for dep in &module.dependencies {
+                let _ = self.run_typecheck_module(*dep);
+            }
+            self.pass_typecheck(&module)
+        };
+        Rc::get_mut(
+            self.store
+                .borrow_mut()
+                .module_interfaces
+                .get_mut(&mid)
+                .unwrap(),
+        )
+        .unwrap()
+        .types = Some(env.clone());
+        Rc::get_mut(self.store.borrow_mut().modules.get_mut(&mid).unwrap())
+            .unwrap()
+            .types = Some(env);
+        Ok(())
+    }
+
+    pub fn typecheck_module(&self, mid: ModId) -> Res<Rc<Module>> {
+        self.run_typecheck_module(mid)?;
+        self.store
+            .borrow()
+            .get_mod(mid)
+            .ok_or_else(|| panic!("expected module"))
+    }
 
     pub fn compile_script(&self, path: impl AsRef<path::Path>) -> Res<Rc<Module>> {
         let mid = ModuleName::script();
         self.feed_file(mid, path.as_ref())?;
-        self.expand_module(mid)
+        self.typecheck_module(mid)
         //let m = self.expand_module(mid);
 
         //for dep in self.module_deps(mid) {
-        //    let env = self.pass_typecheck(&self.store.borrow().get_mod(dep).unwrap());
+        //    let env = self.pass_typecheck(
+        //        &self.store.borrow().get_mod(dep).unwrap()
+        //    );
         //    Rc::get_mut(
         //        self.store
         //            .borrow_mut()
