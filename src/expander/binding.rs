@@ -45,14 +45,6 @@ impl Binding {
         }
     }
 
-    fn new_id() -> u64 {
-        IDENTIFIER_ID.with(|id| {
-            let old = id.get();
-            id.set(old.saturating_add(1));
-            old
-        })
-    }
-
     /// Returns the original name associated with the [`Binding`]. For debug and diagnostic
     /// purposes.
     pub fn name(&self) -> &str {

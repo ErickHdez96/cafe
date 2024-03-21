@@ -118,6 +118,12 @@ impl fmt::Debug for Ident {
     }
 }
 
+impl fmt::Display for Ident {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.value)
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Path {
     pub span: Span,
@@ -320,6 +326,10 @@ impl Expr {
             span: Span::dummy(),
             kind: ExprKind::Void,
         }
+    }
+
+    pub fn is_lambda(&self) -> bool {
+        matches!(self.kind, ExprKind::Lambda { .. })
     }
 }
 

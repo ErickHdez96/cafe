@@ -30,7 +30,7 @@ pub fn intrinsics_env() -> BEnv<'static> {
 pub fn import(
     expander: &mut Expander<'_>,
     mut source: SynList,
-    span: Span,
+    _span: Span,
     env: &mut BEnv,
 ) -> Vec<ast::ModId> {
     source.next();
@@ -66,12 +66,7 @@ pub fn import(
     mids
 }
 
-pub fn module(
-    expander: &mut Expander<'_>,
-    mut source: SynList,
-    span: Span,
-    env: &mut BEnv,
-) -> ast::ModId {
+pub fn module(expander: &mut Expander<'_>, mut source: SynList, _span: Span) -> ast::ModId {
     let CstKind::List(l, ListKind::List) = &source.nth(1).unwrap().kind else {
         todo!()
     };
@@ -105,7 +100,7 @@ pub fn module(
     mid
 }
 
-fn parse_module_name(expander: &mut Expander<'_>, mut source: Source) -> ast::ModId {
+fn parse_module_name(_expander: &mut Expander<'_>, mut source: Source) -> ast::ModId {
     let mut symbols = vec![];
     for c in source.by_ref() {
         match &c.kind {
@@ -123,7 +118,7 @@ fn parse_module_name(expander: &mut Expander<'_>, mut source: Source) -> ast::Mo
     ast::ModuleName::from_strings(symbols)
 }
 
-fn parse_export_identifiers(expander: &mut Expander<'_>, mut source: Source) -> Vec<ast::Ident> {
+fn parse_export_identifiers(_expander: &mut Expander<'_>, mut source: Source) -> Vec<ast::Ident> {
     let exports = source
         .by_ref()
         .map(|c| ast::Ident {

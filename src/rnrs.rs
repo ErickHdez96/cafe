@@ -134,6 +134,14 @@ pub fn intrinsics_interface() -> ast::ModuleInterface {
                     orig_module: mid,
                 },
             ),
+            (
+                "cons".into(),
+                Binding::Value {
+                    scopes: Scopes::core(),
+                    name: "cons".into(),
+                    orig_module: mid,
+                },
+            ),
         ]),
         types: Some(Env::from_iter(vec![
             ("+".into(), Rc::clone(&object)),
@@ -145,6 +153,7 @@ pub fn intrinsics_interface() -> ast::ModuleInterface {
             ("<=".into(), Rc::clone(&object)),
             (">".into(), Rc::clone(&object)),
             (">=".into(), Rc::clone(&object)),
+            ("cons".into(), Rc::clone(&object)),
         ])),
         dependencies: vec![],
     }

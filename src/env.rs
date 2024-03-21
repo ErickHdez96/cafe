@@ -144,6 +144,10 @@ impl<'p, K, V> Env<'p, K, V> {
     pub fn into_bindings(self) -> HashMap<K, V> {
         self.bindings
     }
+
+    pub fn set_bindings(&mut self, bindings: HashMap<K, V>) {
+        self.bindings = bindings;
+    }
 }
 
 impl<K, V> Env<'_, K, V>

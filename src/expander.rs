@@ -1,4 +1,3 @@
-#![allow(dead_code, unused_variables)]
 use std::{fmt, rc::Rc};
 
 use crate::{
@@ -230,7 +229,7 @@ impl Expander<'_> {
                         ast::Item::Import(mid, span)
                     }
                     Some(Binding::Module { .. }) => {
-                        let mid = module(self, source.reset(), span, env);
+                        let mid = module(self, source.reset(), span);
                         ast::Item::Mod(mid, span)
                     }
                     _ => ast::Expr {
@@ -343,17 +342,6 @@ impl Expander<'_> {
         (self.import)(mid)
     }
 
-    fn enter_module(&mut self, module: ast::ModId) {
-        self.module_stack.push((
-            std::mem::replace(&mut self.module, module),
-            std::mem::take(&mut self.dependencies),
-        ));
-    }
-
-    fn exit_module(&mut self) {
-        (self.module, self.dependencies) = self.module_stack.pop().unwrap();
-    }
-
     const fn current_module(&self) -> ast::ModId {
         self.module
     }
@@ -431,129 +419,14 @@ impl Iterator for Source {
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::RefCell, collections::HashMap};
-
     use expect_test::{expect, Expect};
 
-    use crate::{span::Span, syntax::parser::parse_str, utils::Resolve};
-
-    use self::scopes::Scopes;
+    use crate::{test::test_expand_str, utils::Resolve};
 
     use super::*;
 
-    fn core_env() -> Env<'static, String, Binding> {
-        let mut core = Env::new();
-        core.insert(
-            String::from("import"),
-            Binding::Import {
-                scopes: Scopes::core(),
-            },
-        );
-        core.insert(
-            String::from("module"),
-            Binding::Module {
-                scopes: Scopes::core(),
-            },
-        );
-        core.insert(
-            String::from("define"),
-            Binding::CoreDefTransformer {
-                scopes: Scopes::core(),
-                name: String::from("define"),
-                transformer: core::define_transformer,
-            },
-        );
-        core.insert(
-            String::from("lambda"),
-            Binding::CoreExprTransformer {
-                scopes: Scopes::core(),
-                name: String::from("lambda"),
-                transformer: core::lambda_transformer,
-            },
-        );
-        core.insert(
-            String::from("if"),
-            Binding::CoreExprTransformer {
-                scopes: Scopes::core(),
-                name: String::from("if"),
-                transformer: core::if_transformer,
-            },
-        );
-        core.insert(
-            String::from("quote"),
-            Binding::CoreExprTransformer {
-                scopes: Scopes::core(),
-                name: String::from("quote"),
-                transformer: core::quote_transformer,
-            },
-        );
-        core.insert(
-            String::from("cons"),
-            Binding::Value {
-                scopes: Scopes::core(),
-                orig_module: ast::ModuleName::from_strings(vec!["rnrs", "expander", "core"]),
-                name: String::from("cons"),
-            },
-        );
-        core
-    }
-
-    struct Libs {
-        libs: RefCell<HashMap<ast::ModId, ast::Module>>,
-    }
-
-    impl Default for Libs {
-        fn default() -> Self {
-            let mid = ast::ModuleName::from_strings(vec!["rnrs", "expander", "core"]);
-            Self {
-                libs: RefCell::new(HashMap::from([(
-                    mid,
-                    ast::Module {
-                        id: mid,
-                        span: Span::dummy(),
-                        dependencies: vec![],
-                        exports: core_env(),
-                        bindings: Env::default(),
-                        body: ast::Expr::dummy(),
-                        types: None,
-                    },
-                )])),
-            }
-        }
-    }
-
-    impl Libs {
-        fn import(&self, mid: ast::ModId) -> Result<Rc<ast::ModuleInterface>, Diagnostic> {
-            Ok(Rc::new(
-                self.libs
-                    .borrow()
-                    .get(&mid)
-                    .expect(&format!("{}", mid.resolve()))
-                    .to_interface(),
-            ))
-        }
-
-        fn define(&self, mid: ast::ModId, module: ast::Module) {
-            self.libs.borrow_mut().insert(mid, module);
-        }
-    }
-
     pub fn check(input: &str, expected: Expect) -> ExpanderResultMod {
-        let res = parse_str(input);
-        assert_eq!(res.diagnostics, vec![]);
-        let env = core_env().enter_consume();
-        let libs = Libs::default();
-
-        let res = expand_module_with_config(
-            res.root,
-            ExpanderConfig::default()
-                .import(&|mid| libs.import(mid))
-                .register(&|mid, mod_| libs.define(mid, mod_))
-                .file_id(res.file_id)
-                .base_env(&env),
-        );
-
-        assert_eq!(res.diagnostics, vec![]);
+        let res = test_expand_str(input);
         expected.assert_debug_eq(&res.module.body);
         res
     }
@@ -709,7 +582,7 @@ mod tests {
             "cons",
             expect![[r#"
                 {body 0:0..4
-                  {var |cons| (rnrs expander core ()) 0:0..4}}
+                  {var |cons| (rnrs intrinsics ()) 0:0..4}}
             "#]],
         );
     }
@@ -721,7 +594,7 @@ mod tests {
             expect![[r#"
                 {body 0:0..12
                   {list 0:0..12
-                    {var |cons| (rnrs expander core ()) 0:1..4}
+                    {var |cons| (rnrs intrinsics ()) 0:1..4}
                     {#t 0:6..2}
                     {#f 0:9..2}}}
             "#]],
