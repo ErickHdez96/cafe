@@ -4,8 +4,10 @@ use crate::{new_id, utils::Id};
 
 new_id!(pub struct GenericId(usize));
 
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, Default, PartialEq, Eq, Hash)]
 pub enum Ty {
+    #[default]
+    None,
     /// Generic Scheme object.
     SObject,
     Boolean,
@@ -26,10 +28,17 @@ pub enum Ty {
     Error,
 }
 
+impl Ty {
+    pub fn is_boolean(&self) -> bool {
+        matches!(self, Ty::Boolean)
+    }
+}
+
 impl fmt::Debug for Ty {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if f.alternate() {
             match self {
+                Self::None => write!(f, "none"),
                 Self::SObject => write!(f, "object"),
                 Self::Boolean => write!(f, "boolean"),
                 Self::Char => write!(f, "char"),
@@ -58,6 +67,7 @@ impl fmt::Debug for Ty {
             }
         } else {
             match self {
+                Self::None => write!(f, "None"),
                 Self::SObject => write!(f, "SObject"),
                 Self::Boolean => write!(f, "Boolean"),
                 Self::Char => write!(f, "Char"),

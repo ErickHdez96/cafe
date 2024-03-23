@@ -11,6 +11,7 @@ use crate::{
         cst::{Cst, CstKind, ListKind, Prefix},
         parser::{parse_char, parse_number, Number},
     },
+    ty,
     utils::Symbol,
 };
 
@@ -74,6 +75,7 @@ pub fn expand_module_with_config(
         module_stack: vec![],
         import: config.import.expect("an import function"),
         register: config.register.expect("a register function"),
+        none_ty: Rc::default(),
     };
     let env = intrinsics_env();
     e.expand_module(module, config.base_env.unwrap_or(&env))
@@ -87,6 +89,7 @@ pub struct Expander<'i> {
     module_stack: Vec<(ast::ModId, Vec<ast::ModId>)>,
     import: &'i dyn Fn(ast::ModId) -> Result<Rc<ast::ModuleInterface>, Diagnostic>,
     register: &'i dyn Fn(ast::ModId, ast::Module),
+    none_ty: Rc<ty::Ty>,
 }
 
 impl fmt::Debug for Expander<'_> {
@@ -164,6 +167,7 @@ impl Expander<'_> {
                 body: ast::Expr {
                     span,
                     kind: ast::ExprKind::Body(items),
+                    ty: Rc::clone(&self.none_ty),
                 },
                 types: None,
             },
@@ -184,12 +188,14 @@ impl Expander<'_> {
             CstKind::True | CstKind::False => ast::Expr {
                 span,
                 kind: ast::ExprKind::Boolean(cst.kind == CstKind::True),
+                ty: Rc::clone(&self.none_ty),
             }
             .into(),
             CstKind::Ident(ident) => self.expand_ident(ident, span, env),
             CstKind::Char(c) => ast::Expr {
                 span,
                 kind: ast::ExprKind::Char(parse_char(c)),
+                ty: Rc::clone(&self.none_ty),
             }
             .into(),
             CstKind::Number(n) => ast::Expr {
@@ -201,6 +207,7 @@ impl Expander<'_> {
                         Number::Fixnum(0)
                     }
                 }),
+                ty: Rc::clone(&self.none_ty),
             }
             .into(),
             CstKind::String(_) => todo!(),
@@ -242,6 +249,7 @@ impl Expander<'_> {
                                 })
                                 .collect(),
                         ),
+                        ty: Rc::clone(&self.none_ty),
                     }
                     .into(),
                 },
@@ -255,6 +263,7 @@ impl Expander<'_> {
                             })
                             .collect(),
                     ),
+                    ty: Rc::clone(&self.none_ty),
                 }
                 .into(),
             },
@@ -263,6 +272,7 @@ impl Expander<'_> {
                 ast::Expr {
                     span,
                     kind: ast::ExprKind::List(vec![]),
+                    ty: Rc::clone(&self.none_ty),
                 }
                 .into()
             }
@@ -280,6 +290,7 @@ impl Expander<'_> {
                     module: *orig_module,
                     value: ident.into(),
                 }),
+                ty: Rc::clone(&self.none_ty),
             }
             .into(),
             None => {
@@ -291,6 +302,7 @@ impl Expander<'_> {
                         module: self.module,
                         value: ident.into(),
                     }),
+                    ty: Rc::clone(&self.none_ty),
                 }
                 .into()
             }

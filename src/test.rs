@@ -15,7 +15,8 @@ use crate::{
         ast,
         parser::{parse_str, ParseResult},
     },
-    ty,
+    ty::{self, BuiltinTys},
+    tyc::typecheck_module,
     utils::{Resolve, Symbol},
 };
 
@@ -38,6 +39,18 @@ pub fn test_expand_str(input: &str) -> ExpanderResultMod {
     test_expand_str_with_libs(input, &libs)
 }
 
+fn typecheck(
+    libs: &Libs,
+    mod_: &mut ast::Module,
+    builtin_tys: BuiltinTys,
+) -> Env<'static, String, Rc<ty::Ty>> {
+    let (res, diags) = typecheck_module(mod_, builtin_tys, |mid| {
+        libs.import(mid).expect("unknown mid: {mid:#?}")
+    });
+    assert_eq!(Vec::<Diagnostic>::new(), diags);
+    res
+}
+
 pub fn test_expand_str_with_libs(input: &str, libs: &Libs) -> ExpanderResultMod {
     let res = test_parse_str(input);
     let env = rnrs_env();
@@ -57,13 +70,17 @@ pub fn test_expand_str_with_libs(input: &str, libs: &Libs) -> ExpanderResultMod 
 
 pub fn test_lower_str(input: &str) -> ir::Package {
     let libs = Libs::default();
-    let res = test_expand_str_with_libs(input, &libs);
+    let builtin_tys = ty::BuiltinTys::default();
+
+    let mut res = test_expand_str_with_libs(input, &libs);
+    let env = typecheck(&libs, &mut res.module, builtin_tys.clone());
+    res.module.types = Some(env);
     let intrinsics_mid = ast::ModuleName::from_strings(vec!["rnrs", "intrinsics"]);
     match lower_ast(
         &res.module,
         intrinsics_mid,
         &|mid| libs.import_mod(mid),
-        &ty::BuiltinTys::default(),
+        builtin_tys,
     ) {
         Ok(p) => p,
         Err(d) => {

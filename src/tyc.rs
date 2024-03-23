@@ -3,7 +3,7 @@ use std::rc::Rc;
 use crate::{
     diagnostics::Diagnostic,
     env::Env,
-    syntax::ast,
+    syntax::{ast, parser},
     ty::{BuiltinTys, Ty, TyCo},
     utils::Resolve,
 };
@@ -18,7 +18,7 @@ struct TypeChecker<'tyc> {
 }
 
 pub fn typecheck_module(
-    module: &ast::Module,
+    module: &mut ast::Module,
     builtins: BuiltinTys,
     get_mod_interface: impl Fn(ast::ModId) -> Rc<ast::ModuleInterface>,
 ) -> (Env<'static, String, Rc<Ty>>, Vec<Diagnostic>) {
@@ -33,10 +33,10 @@ pub fn typecheck_module(
 }
 
 impl TypeChecker<'_> {
-    fn mod_(&mut self, mod_: &ast::Module) -> Env<'static, String, Rc<Ty>> {
+    fn mod_(&mut self, mod_: &mut ast::Module) -> Env<'static, String, Rc<Ty>> {
         let mut tys = Env::default();
 
-        let ast::ExprKind::Body(body) = &mod_.body.kind else {
+        let ast::ExprKind::Body(body) = &mut mod_.body.kind else {
             panic!(
                 "expected a letrec as the body of a module: {:#?}",
                 mod_.body
@@ -52,12 +52,15 @@ impl TypeChecker<'_> {
                         d.name.value.clone(),
                         TyCo::Ty(Rc::clone(&self.builtins.object)),
                     );
-                    if let Some(e) = &d.expr {
-                        self.expr(e, &tys);
+                    if let Some(e) = &mut d.expr {
+                        self.expr(e, &mut tys);
+                        if let Some(ty) = tys.get_immediate_mut(&d.name.value) {
+                            *ty = TyCo::Ty(Rc::clone(&e.ty));
+                        }
                     }
                 }
                 ast::Item::Expr(e) => {
-                    self.expr(e, &tys);
+                    self.expr(e, &mut tys);
                 }
             }
         }
@@ -68,8 +71,8 @@ impl TypeChecker<'_> {
             .collect::<Env<'_, _, _>>()
     }
 
-    fn expr(&mut self, expr: &ast::Expr, tyenv: &TyCoEnv) -> Rc<Ty> {
-        match &expr.kind {
+    fn expr(&mut self, expr: &mut ast::Expr, tyenv: &mut TyCoEnv) -> Rc<Ty> {
+        let ty = match &mut expr.kind {
             ast::ExprKind::Body(body) => {
                 let mut tyenv = tyenv.enter();
                 let mut ret = Rc::clone(&self.builtins.void);
@@ -82,13 +85,16 @@ impl TypeChecker<'_> {
                                 d.name.value.clone(),
                                 TyCo::Ty(Rc::clone(&self.builtins.object)),
                             );
-                            if let Some(e) = &d.expr {
-                                self.expr(e, &tyenv);
+                            if let Some(e) = &mut d.expr {
+                                self.expr(e, &mut tyenv);
+                                if let Some(ty) = tyenv.get_immediate_mut(&d.name.value) {
+                                    *ty = TyCo::Ty(Rc::clone(&e.ty));
+                                }
                             }
                             ret = Rc::clone(&self.builtins.void);
                         }
                         ast::Item::Expr(e) => {
-                            ret = self.expr(e, &tyenv);
+                            ret = self.expr(e, &mut tyenv);
                         }
                     }
                 }
@@ -116,7 +122,12 @@ impl TypeChecker<'_> {
                 rest,
                 expr,
             } => self.lambda(formals, rest.as_ref(), expr, tyenv),
-            ast::ExprKind::List(_) => Rc::clone(&self.builtins.object),
+            ast::ExprKind::List(l) => {
+                for e in l {
+                    self.expr(e, tyenv);
+                }
+                Rc::clone(&self.builtins.object)
+            }
             ast::ExprKind::DottedList(_, _) => Rc::clone(&self.builtins.object),
             ast::ExprKind::Boolean(_) => Rc::clone(&self.builtins.boolean),
             ast::ExprKind::Char(_) => Rc::clone(&self.builtins.char),
@@ -141,34 +152,38 @@ impl TypeChecker<'_> {
                 }
                 ret.unwrap()
             }
-            ast::ExprKind::Number(_) => Rc::clone(&self.builtins.object),
-        }
+            ast::ExprKind::Number(n) => match n {
+                parser::Number::Fixnum(_) => Rc::clone(&self.builtins.fixnum),
+            },
+        };
+        expr.ty = Rc::clone(&ty);
+        ty
     }
 
     fn lambda(
         &mut self,
         formals: &[ast::Ident],
         rest: Option<&ast::Ident>,
-        expr: &ast::Expr,
-        tyenv: &TyCoEnv,
+        expr: &mut ast::Expr,
+        tyenv: &mut TyCoEnv,
     ) -> Rc<Ty> {
         let mut tyenv = tyenv.enter();
         for f in formals {
             if !tyenv.has_immediate(&f.value) {
-                tyenv.insert(f.value.clone(), TyCo::new_generic());
+                tyenv.insert(f.value.clone(), TyCo::Ty(Rc::clone(&self.builtins.object)));
             }
         }
         if let Some(r) = rest {
             tyenv.insert(r.value.clone(), TyCo::from_ty(&self.builtins.object));
         }
-        let expr = self.expr(expr, &tyenv);
+        let ty = self.expr(expr, &mut tyenv);
         Rc::new(Ty::Lambda {
             params: formals
                 .iter()
                 .map(|f| tyenv.get(&f.value).cloned().unwrap().into())
                 .collect(),
             rest: rest.and_then(|r| tyenv.get(&r.value).cloned().map(|v| v.into())),
-            ret: expr,
+            ret: ty,
         })
     }
 
@@ -220,7 +235,7 @@ mod tests {
         check(
             "(import (rnrs expander core))
              (define a #t)",
-            expect!["a: object"],
+            expect!["a: boolean"],
         );
     }
 
@@ -229,7 +244,16 @@ mod tests {
         check(
             r"(import (rnrs expander core))
               (define a #\λ)",
-            expect!["a: object"],
+            expect!["a: char"],
+        );
+    }
+
+    #[test]
+    fn number() {
+        check(
+            r"(import (rnrs expander core))
+              (define a 1)",
+            expect!["a: fixnum"],
         );
     }
 
@@ -238,7 +262,7 @@ mod tests {
         check(
             r"(import (rnrs expander core))
               (define a (lambda (x) x))",
-            expect!["a: object"],
+            expect!["a: (-> object object)"],
         );
     }
 }

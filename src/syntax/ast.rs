@@ -276,6 +276,7 @@ impl fmt::Debug for Define {
 pub struct Expr {
     pub span: Span,
     pub kind: ExprKind,
+    pub ty: Rc<Ty>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -310,6 +311,7 @@ impl Expr {
         Self {
             span: self.span,
             kind: ExprKind::Error(Box::new(Item::Expr(self))),
+            ty: Rc::default(),
         }
     }
 
@@ -317,6 +319,7 @@ impl Expr {
     pub fn into_quote(self) -> Self {
         Self {
             span: self.span,
+            ty: Rc::default(),
             kind: ExprKind::Quote(Box::new(self)),
         }
     }
@@ -325,6 +328,7 @@ impl Expr {
         Self {
             span: Span::dummy(),
             kind: ExprKind::Void,
+            ty: Rc::default(),
         }
     }
 
@@ -481,6 +485,7 @@ impl fmt::Debug for Expr {
             f.debug_struct("Expr")
                 .field("span", &self.span)
                 .field("kind", &self.kind)
+                .field("ty", &self.ty)
                 .finish()
         }
     }

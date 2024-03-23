@@ -184,6 +184,14 @@ where
         self.bindings.get(k)
     }
 
+    pub fn get_immediate_mut<Q: ?Sized>(&mut self, k: &Q) -> Option<&mut V>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq,
+    {
+        self.bindings.get_mut(k)
+    }
+
     pub fn get_all<Q: ?Sized>(&self, k: &Q) -> Vec<&V>
     where
         K: Borrow<Q>,

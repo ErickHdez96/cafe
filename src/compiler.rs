@@ -154,8 +154,12 @@ impl Compiler {
         ))
     }
 
-    pub fn pass_typecheck(&self, mod_: &Module) -> Env<'static, String, Rc<Ty>> {
-        let (res, diags) = typecheck_module(mod_, self.store.borrow().builtin_tys.clone(), |mid| {
+    pub fn pass_typecheck(
+        &self,
+        mod_: &mut Module,
+        builtin_tys: BuiltinTys,
+    ) -> Env<'static, String, Rc<Ty>> {
+        let (res, diags) = typecheck_module(mod_, builtin_tys, |mid| {
             self.store
                 .borrow()
                 .module_interfaces
@@ -216,12 +220,20 @@ impl Compiler {
             }
         }
 
-        let env = {
+        {
             let module = self.expand_module(mid)?;
             for dep in &module.dependencies {
                 let _ = self.run_typecheck_module(*dep);
             }
-            self.pass_typecheck(&module)
+        }
+
+        let env = {
+            let mut store = self.store.borrow_mut();
+            let builtin_tys = store.builtin_tys.clone();
+            self.pass_typecheck(
+                Rc::get_mut(store.modules.get_mut(&mid).unwrap()).expect("module should be unique"),
+                builtin_tys,
+            )
         };
         Rc::get_mut(
             self.store

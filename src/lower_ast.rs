@@ -35,7 +35,7 @@ pub fn lower_ast(
     // TODO: Improve this
     intrinsics_mid: ast::ModId,
     import: &dyn Fn(ast::ModId) -> Result<Rc<ast::Module>, Diagnostic>,
-    builtin_tys: &ty::BuiltinTys,
+    builtin_tys: ty::BuiltinTys,
 ) -> Result<ir::Package, Vec<Diagnostic>> {
     let mut lowerer = Lowerer {
         import,
@@ -54,10 +54,10 @@ pub fn lower_ast(
         .ok_or_else(|| std::mem::take(&mut lowerer.diagnostics))
 }
 
-struct Lowerer<'i, 'ty> {
+struct Lowerer<'i> {
     import: &'i dyn Fn(ast::ModId) -> Result<Rc<ast::Module>, Diagnostic>,
     intrinsics_mid: ast::ModId,
-    builtin_tys: &'ty ty::BuiltinTys,
+    builtin_tys: ty::BuiltinTys,
     diagnostics: Vec<Diagnostic>,
     current_module: ast::ModId,
     //modules: Vec<ast::ModId>,
@@ -67,7 +67,7 @@ struct Lowerer<'i, 'ty> {
     bodies: Vec<ir::Body>,
 }
 
-impl Lowerer<'_, '_> {
+impl Lowerer<'_> {
     fn lower_ast(&mut self, mod_: &ast::Module) -> Option<ir::Package> {
         self.lower_mod(mod_)
     }
@@ -239,8 +239,7 @@ impl Lowerer<'_, '_> {
             ast::ExprKind::List(l) => self.lower_list(l, expr.span, local, env),
             ast::ExprKind::DottedList(_, _) => todo!(),
             ast::ExprKind::Boolean(b) => {
-                let l =
-                    self.get_or_alloc_local(local, expr.span, Rc::clone(&self.builtin_tys.boolean));
+                let l = self.get_or_alloc_local(local, expr.span, Rc::clone(&expr.ty));
                 self.body_builder.load_i(
                     l,
                     ir::Constant::new(if *b { 1 } else { 0 }, expr.span),
@@ -249,15 +248,13 @@ impl Lowerer<'_, '_> {
                 l
             }
             ast::ExprKind::Char(c) => {
-                let l =
-                    self.get_or_alloc_local(local, expr.span, Rc::clone(&self.builtin_tys.char));
+                let l = self.get_or_alloc_local(local, expr.span, Rc::clone(&expr.ty));
                 self.body_builder
                     .load_i(l, ir::Constant::new(*c as u64, expr.span), expr.span);
                 l
             }
             ast::ExprKind::Number(n) => {
-                let l =
-                    self.get_or_alloc_local(local, expr.span, Rc::clone(&self.builtin_tys.fixnum));
+                let l = self.get_or_alloc_local(local, expr.span, Rc::clone(&expr.ty));
                 match n {
                     parser::Number::Fixnum(fx) => {
                         self.body_builder.load_i(
@@ -274,8 +271,7 @@ impl Lowerer<'_, '_> {
                     panic!("undefined variable {:}", v.value)
                 };
 
-                let l =
-                    self.get_or_alloc_local(local, expr.span, Rc::clone(&self.builtin_tys.object));
+                let l = self.get_or_alloc_local(local, expr.span, Rc::clone(&expr.ty));
 
                 match place {
                     Place::Local(loc) => {
@@ -303,32 +299,38 @@ impl Lowerer<'_, '_> {
         local: Option<ir::Local>,
         env: &PEnv,
     ) -> ir::Local {
-        let l = self.get_or_alloc_local(local, span, Rc::clone(&self.builtin_tys.object));
+        let retl = self.get_or_alloc_local(local, span, Rc::clone(&self.builtin_tys.object));
         let cl = self.lower_expr(cond, None, env);
-        self.body_builder.arg(cl, cond.span);
-        let cond_local = self.get_or_alloc_local(None, span, Rc::clone(&self.builtin_tys.boolean));
-        self.body_builder.call_label(
-            cond_local,
-            ast::Path {
-                span,
-                module: self.intrinsics_mid,
-                value: "truthy?".into(),
-            },
-            cond.span,
-        );
+        let cond_local = if self.body_builder.get_local(cl).ty.is_boolean() {
+            cl
+        } else {
+            self.body_builder.arg(cl, cond.span);
+            let cond_local =
+                self.get_or_alloc_local(None, span, Rc::clone(&self.builtin_tys.boolean));
+            self.body_builder.call_label(
+                cond_local,
+                ast::Path {
+                    span,
+                    module: self.intrinsics_mid,
+                    value: "truthy?".into(),
+                },
+                cond.span,
+            );
+            cond_local
+        };
 
         let cidx = self
             .body_builder
             .terminate_block(ir::TerminatorKind::default(), cond.span);
 
         let tl = self.lower_expr(r#true, None, env);
-        self.body_builder.copy(l, tl, r#true.span);
+        self.body_builder.copy(retl, tl, r#true.span);
         let tidx = self
             .body_builder
             .terminate_block(ir::TerminatorKind::default(), r#true.span);
 
         let fl = self.lower_expr(r#false, None, env);
-        self.body_builder.copy(l, fl, r#false.span);
+        self.body_builder.copy(retl, fl, r#false.span);
         let fidx = self
             .body_builder
             .terminate_block(ir::TerminatorKind::default(), r#false.span);
@@ -342,7 +344,12 @@ impl Lowerer<'_, '_> {
         self.body_builder.get_block_mut(tidx).terminator.kind = ir::TerminatorKind::Goto(endidx);
         self.body_builder.get_block_mut(fidx).terminator.kind = ir::TerminatorKind::Goto(endidx);
 
-        l
+        let tlty = Rc::clone(&self.body_builder.get_local(tl).ty);
+        if Rc::ptr_eq(&tlty, &self.body_builder.get_local(fl).ty) {
+            self.body_builder.get_local_mut(retl).ty = tlty;
+        }
+
+        retl
     }
 
     fn lower_list(
@@ -473,6 +480,14 @@ impl BodyBuilder {
         };
         self.reset();
         body
+    }
+
+    fn get_local(&self, local: ir::Local) -> &ir::LocalDecl {
+        &self.locals[TryInto::<usize>::try_into(local.value()).unwrap()]
+    }
+
+    fn get_local_mut(&mut self, local: ir::Local) -> &mut ir::LocalDecl {
+        &mut self.locals[TryInto::<usize>::try_into(local.value()).unwrap()]
     }
 
     fn alloc(&mut self, span: Span, ty: Rc<ty::Ty>) -> ir::Local {
@@ -627,23 +642,20 @@ mod tests {
                     (pkg
                       (fn (|{|@init| (#script ()) 0:0..11}|) void (0:0..11)
                         (let ([_0 void (0:0..11)]
-                              [_1 object (0:0..11)]
+                              [_1 fixnum (0:0..11)]
                               [_2 boolean (0:4..2)]
-                              [_3 boolean (0:0..11)]
-                              [_4 fixnum (0:7..1)]
-                              [_5 fixnum (0:9..1)])
+                              [_3 fixnum (0:7..1)]
+                              [_4 fixnum (0:9..1)])
                           (bb 0
                             (loadI _2 1 (0:4..2))
-                            (arg _2 (0:4..2))
-                            (call-label _3 |{|truthy?| (rnrs intrinsics ()) 0:0..11}| (0:4..2))
-                            (cond _3 bb1 bb2 (0:4..2)))
+                            (cond _2 bb1 bb2 (0:4..2)))
                           (bb 1
-                            (loadI _4 1 (0:7..1))
-                            (copy _1 _4 (0:7..1))
+                            (loadI _3 1 (0:7..1))
+                            (copy _1 _3 (0:7..1))
                             (goto bb3 (0:7..1)))
                           (bb 2
-                            (loadI _5 2 (0:9..1))
-                            (copy _1 _5 (0:9..1))
+                            (loadI _4 2 (0:9..1))
+                            (copy _1 _4 (0:9..1))
                             (goto bb3 (0:9..1)))
                           (bb 3
                             (return (0:0..11))))))
@@ -671,7 +683,7 @@ mod tests {
                       (fn (|{|@init| (#script ()) 0:0..51}|) void (0:0..51)
                         (let ([_0 void (0:0..51)]
                               [_1 object (0:44..7)]
-                              [_2 object (0:45..2)]
+                              [_2 (-> object object) (0:45..2)]
                               [_3 boolean (0:48..2)])
                           (bb 0
                             (addressof _2 |{|id| (#script ()) 0:8..2}| (0:45..2))
