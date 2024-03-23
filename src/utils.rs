@@ -1,6 +1,6 @@
 use std::hash::Hash;
 
-pub type Atom = String;
+pub type Symbol = String;
 
 pub trait Id: PartialEq + Eq + Copy + Hash {
     fn new() -> Self;

@@ -11,7 +11,7 @@ use crate::{
         cst::{Cst, CstKind, ListKind, Prefix},
         parser::{parse_char, parse_number, Number},
     },
-    utils::Atom,
+    utils::Symbol,
 };
 
 use self::{
@@ -271,7 +271,7 @@ impl Expander<'_> {
         }
     }
 
-    fn expand_ident(&mut self, ident: &Atom, span: Span, env: &BEnv) -> Item {
+    fn expand_ident(&mut self, ident: &Symbol, span: Span, env: &BEnv) -> Item {
         match env.get(ident) {
             Some(Binding::Value { orig_module, .. }) => ast::Expr {
                 span,

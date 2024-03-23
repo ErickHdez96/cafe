@@ -1,6 +1,6 @@
 use std::{fmt, rc::Rc};
 
-use crate::{span::Span, utils::Atom};
+use crate::{span::Span, utils::Symbol};
 
 use super::scanner::Token;
 
@@ -85,7 +85,7 @@ impl Cst {
         }
     }
 
-    pub fn to_ident(&self) -> Option<&Atom> {
+    pub fn to_ident(&self) -> Option<&Symbol> {
         match &self.kind {
             CstKind::Ident(ident) => Some(ident),
             _ => None,
@@ -106,15 +106,15 @@ pub enum CstKind {
     False,
     HashSemicolon,
 
-    Ident(Atom),
-    Char(Atom),
-    Number(Atom),
-    String(Atom),
+    Ident(Symbol),
+    Char(Symbol),
+    Number(Symbol),
+    String(Symbol),
 
-    SingleComment(Atom),
-    MultiComment(Atom),
+    SingleComment(Symbol),
+    MultiComment(Symbol),
     DatumComment(Vec<Rc<Cst>>),
-    Whitespace(Atom),
+    Whitespace(Symbol),
     #[default]
     Dummy,
     Eof,

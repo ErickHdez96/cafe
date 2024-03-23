@@ -1,6 +1,6 @@
-use std::fmt;
+use std::{fmt, rc::Rc};
 
-use crate::{span::Span, syntax::ast::Path};
+use crate::{span::Span, syntax::ast::Path, ty::Ty};
 
 const INDENTAION_WIDTH: usize = 2;
 
@@ -51,7 +51,7 @@ impl fmt::Debug for Body {
             let padding = " ".repeat(width);
             writeln!(
                 f,
-                "{padding}(fn (|{:#?}|{}) {} ({})",
+                "{padding}(fn (|{:#?}|{}) {:#?} ({})",
                 self.name,
                 if self.param_count == 0 {
                     String::new()
@@ -63,7 +63,7 @@ impl fmt::Debug for Body {
                             .enumerate()
                             .skip(1)
                             .take(self.param_count)
-                            .map(|(i, l)| format!("[_{i}: {}]", l.ty))
+                            .map(|(i, l)| format!("[_{i}: {:#?}]", l.ty))
                             .collect::<Vec<_>>()
                             .join(" ")
                     )
@@ -75,7 +75,7 @@ impl fmt::Debug for Body {
             for (i, ld) in self.locals.iter().enumerate() {
                 write!(
                     f,
-                    "{}[{} {} ({})]{}",
+                    "{}[{} {:#?} ({})]{}",
                     if i > 0 {
                         format!(
                             "\n{}",
@@ -121,7 +121,7 @@ impl fmt::Debug for Body {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalDecl {
     pub span: Span,
-    pub ty: Ty,
+    pub ty: Rc<Ty>,
     pub stack_offset: u32,
     pub size: u32,
 }
@@ -136,6 +136,10 @@ impl Local {
 
     pub fn value(self) -> u32 {
         self.0
+    }
+
+    pub fn ret() -> Self {
+        Self::new(0)
     }
 
     /// Tests whether it is the return local.
@@ -418,20 +422,4 @@ pub enum TerminatorKind {
         true_label: BasicBlock,
         false_label: BasicBlock,
     },
-}
-
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub enum Ty {
-    #[default]
-    Unit,
-    Boolean,
-}
-
-impl fmt::Display for Ty {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Ty::Unit => "unit".fmt(f),
-            Ty::Boolean => "boolean".fmt(f),
-        }
-    }
 }

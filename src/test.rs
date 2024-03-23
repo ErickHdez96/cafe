@@ -15,10 +15,11 @@ use crate::{
         ast,
         parser::{parse_str, ParseResult},
     },
-    utils::{Atom, Resolve},
+    ty,
+    utils::{Resolve, Symbol},
 };
 
-pub fn rnrs_env() -> Env<'static, Atom, Binding> {
+pub fn rnrs_env() -> Env<'static, Symbol, Binding> {
     let mut env = intrinsics_env().enter_consume();
     env.set_bindings(core_expander_interface().bindings.into_bindings());
     env = env.enter_consume();
@@ -57,7 +58,13 @@ pub fn test_expand_str_with_libs(input: &str, libs: &Libs) -> ExpanderResultMod 
 pub fn test_lower_str(input: &str) -> ir::Package {
     let libs = Libs::default();
     let res = test_expand_str_with_libs(input, &libs);
-    match lower_ast(&res.module, &|mid| libs.import_mod(mid)) {
+    let intrinsics_mid = ast::ModuleName::from_strings(vec!["rnrs", "intrinsics"]);
+    match lower_ast(
+        &res.module,
+        intrinsics_mid,
+        &|mid| libs.import_mod(mid),
+        &ty::BuiltinTys::default(),
+    ) {
         Ok(p) => p,
         Err(d) => {
             assert_eq!(Vec::<Diagnostic>::new(), d);
@@ -72,22 +79,39 @@ pub struct Libs {
 
 impl Default for Libs {
     fn default() -> Self {
-        let mid = ast::ModuleName::from_strings(vec!["rnrs", "expander", "core"]);
+        let intrinsics = intrinsics_interface();
+        let intrinsics_mid = intrinsics.id;
+
         let core = core_expander_interface();
+        let core_mid = core.id;
 
         Self {
-            libs: RefCell::new(HashMap::from([(
-                mid,
-                Rc::new(ast::Module {
-                    id: mid,
-                    span: Span::dummy(),
-                    dependencies: vec![],
-                    exports: core.bindings,
-                    bindings: Env::default(),
-                    body: ast::Expr::dummy(),
-                    types: None,
-                }),
-            )])),
+            libs: RefCell::new(HashMap::from([
+                (
+                    core_mid,
+                    Rc::new(ast::Module {
+                        id: core_mid,
+                        span: Span::dummy(),
+                        dependencies: vec![],
+                        exports: core.bindings,
+                        bindings: Env::default(),
+                        body: ast::Expr::dummy(),
+                        types: None,
+                    }),
+                ),
+                (
+                    intrinsics_mid,
+                    Rc::new(ast::Module {
+                        id: intrinsics_mid,
+                        span: Span::dummy(),
+                        dependencies: vec![],
+                        exports: intrinsics.bindings,
+                        bindings: Env::default(),
+                        body: ast::Expr::dummy(),
+                        types: None,
+                    }),
+                ),
+            ])),
         }
     }
 }

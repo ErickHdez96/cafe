@@ -10,37 +10,35 @@ pub enum Ty {
     SObject,
     Boolean,
     Char,
+    Number(NumberTy),
     String,
     Null,
     Void,
     Symbol,
-    Union(Vec<Rc<Ty>>),
-    Except(Vec<Rc<Ty>>),
     Lambda {
         params: Vec<Rc<Ty>>,
         rest: Option<Rc<Ty>>,
         ret: Rc<Ty>,
     },
     Pair(Rc<Ty>, Rc<Ty>),
+    Generic(GenericId),
     Uninit,
     Error,
-    Generic(GenericId),
 }
 
 impl fmt::Debug for Ty {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if f.alternate() {
             match self {
-                Ty::SObject => write!(f, "object"),
-                Ty::Boolean => write!(f, "boolean"),
-                Ty::Char => write!(f, "char"),
-                Ty::String => write!(f, "string"),
-                Ty::Null => write!(f, "null"),
-                Ty::Void => write!(f, "void"),
-                Ty::Symbol => write!(f, "symbol"),
-                Ty::Union(v) => write!(f, "union({v:?})"),
-                Ty::Except(v) => write!(f, "except({v:?})"),
-                Ty::Lambda { params, rest, ret } => write!(
+                Self::SObject => write!(f, "object"),
+                Self::Boolean => write!(f, "boolean"),
+                Self::Char => write!(f, "char"),
+                Self::Number(n) => n.fmt(f),
+                Self::String => write!(f, "string"),
+                Self::Null => write!(f, "null"),
+                Self::Void => write!(f, "void"),
+                Self::Symbol => write!(f, "symbol"),
+                Self::Lambda { params, rest, ret } => write!(
                     f,
                     "(-> {}{} {ret:#?})",
                     params
@@ -53,30 +51,48 @@ impl fmt::Debug for Ty {
                         None => String::new(),
                     }
                 ),
-                Ty::Pair(car, cdr) => write!(f, "pair({car:?}, {cdr:?})"),
-                Ty::Uninit => write!(f, "uninit"),
-                Ty::Error => write!(f, "error"),
-                Ty::Generic(id) => write!(f, "'{id}"),
+                Self::Pair(car, cdr) => write!(f, "pair({car:?}, {cdr:?})"),
+                Self::Generic(id) => write!(f, "'{id}"),
+                Self::Uninit => write!(f, "uninit"),
+                Self::Error => write!(f, "error"),
             }
         } else {
             match self {
-                Ty::SObject => write!(f, "SObject"),
-                Ty::Boolean => write!(f, "Boolean"),
-                Ty::Char => write!(f, "Char"),
-                Ty::String => write!(f, "String"),
-                Ty::Null => write!(f, "Null"),
-                Ty::Void => write!(f, "Void"),
-                Ty::Symbol => write!(f, "Symbol"),
-                Ty::Union(v) => write!(f, "Union({v:?})"),
-                Ty::Except(v) => write!(f, "Except({v:?})"),
-                Ty::Lambda { params, rest, ret } => write!(
+                Self::SObject => write!(f, "SObject"),
+                Self::Boolean => write!(f, "Boolean"),
+                Self::Char => write!(f, "Char"),
+                Self::Number(n) => n.fmt(f),
+                Self::String => write!(f, "String"),
+                Self::Null => write!(f, "Null"),
+                Self::Void => write!(f, "Void"),
+                Self::Symbol => write!(f, "Symbol"),
+                Self::Lambda { params, rest, ret } => write!(
                     f,
                     "Lambda {{ params: {params:?}, rest: {rest:?}, ret: {ret:?}}}"
                 ),
-                Ty::Pair(car, cdr) => write!(f, "Pair({car:?}, {cdr:?})"),
-                Ty::Uninit => write!(f, "Uninit"),
-                Ty::Error => write!(f, "Error"),
-                Ty::Generic(id) => write!(f, "Generic({id})"),
+                Self::Pair(car, cdr) => write!(f, "Pair({car:?}, {cdr:?})"),
+                Self::Generic(id) => write!(f, "Generic({id})"),
+                Self::Uninit => write!(f, "Uninit"),
+                Self::Error => write!(f, "Error"),
+            }
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub enum NumberTy {
+    Fixnum,
+}
+
+impl fmt::Debug for NumberTy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if f.alternate() {
+            match self {
+                Self::Fixnum => write!(f, "fixnum"),
+            }
+        } else {
+            match self {
+                Self::Fixnum => write!(f, "Fixnum"),
             }
         }
     }
@@ -87,6 +103,7 @@ pub struct BuiltinTys {
     pub object: Rc<Ty>,
     pub boolean: Rc<Ty>,
     pub char: Rc<Ty>,
+    pub fixnum: Rc<Ty>,
     pub string: Rc<Ty>,
     pub null: Rc<Ty>,
     pub void: Rc<Ty>,
@@ -99,6 +116,7 @@ impl Default for BuiltinTys {
             object: Rc::new(Ty::SObject),
             boolean: Rc::new(Ty::Boolean),
             char: Rc::new(Ty::Char),
+            fixnum: Rc::new(Ty::Number(NumberTy::Fixnum)),
             string: Rc::new(Ty::String),
             null: Rc::new(Ty::Null),
             void: Rc::new(Ty::Void),
@@ -117,10 +135,6 @@ impl BuiltinTys {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TyCo {
     Ty(Rc<Ty>),
-    /// The variable can be any of these types.
-    Union(Vec<Rc<Ty>>),
-    /// The variable is a generic scheme object, except any of these types.
-    Except(Vec<Rc<Ty>>),
 }
 
 impl TyCo {
@@ -137,9 +151,6 @@ impl From<TyCo> for Rc<Ty> {
     fn from(value: TyCo) -> Self {
         match value {
             TyCo::Ty(ty) => ty,
-            TyCo::Union(mut v) if v.len() == 1 => v.remove(0),
-            TyCo::Union(v) => Rc::new(Ty::Union(v)),
-            TyCo::Except(v) => Rc::new(Ty::Except(v)),
         }
     }
 }
