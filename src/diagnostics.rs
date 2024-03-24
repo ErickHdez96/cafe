@@ -14,6 +14,10 @@ pub enum DiagnosticLevel {
 }
 
 impl DiagnosticLevel {
+    pub fn is_error(self) -> bool {
+        self == Self::Error
+    }
+
     pub fn style(self) -> Style {
         match self {
             DiagnosticLevel::Error => Style::new().bold().color(Color::BrightRed),

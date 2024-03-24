@@ -1,7 +1,7 @@
 use std::{
     borrow::Borrow,
     collections::{
-        hash_map::{self, Iter},
+        hash_map::{self, Iter, Keys},
         HashMap,
     },
     hash::Hash,
@@ -192,6 +192,14 @@ where
         self.bindings.get_mut(k)
     }
 
+    pub fn remove_immediate<Q: ?Sized>(&mut self, k: &Q) -> Option<V>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq,
+    {
+        self.bindings.remove(k)
+    }
+
     pub fn get_all<Q: ?Sized>(&self, k: &Q) -> Vec<&V>
     where
         K: Borrow<Q>,
@@ -206,6 +214,10 @@ where
             c = s.parent.as_deref();
         }
         bindings
+    }
+
+    pub fn keys(&self) -> Keys<K, V> {
+        self.bindings.keys()
     }
 
     pub fn bindings(&self) -> hash_map::Iter<K, V> {

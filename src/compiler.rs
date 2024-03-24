@@ -16,7 +16,7 @@ use crate::{
         cst::Cst,
         parser::{parse_source_file, ParseResult},
     },
-    ty::{BuiltinTys, Ty},
+    ty::BuiltinTys,
     tyc::typecheck_module,
     utils::Resolve,
 };
@@ -154,12 +154,8 @@ impl Compiler {
         ))
     }
 
-    pub fn pass_typecheck(
-        &self,
-        mod_: &mut Module,
-        builtin_tys: BuiltinTys,
-    ) -> Env<'static, String, Rc<Ty>> {
-        let (res, diags) = typecheck_module(mod_, builtin_tys, |mid| {
+    pub fn pass_typecheck(&self, mod_: &mut Module, builtin_tys: BuiltinTys) {
+        let diags = typecheck_module(mod_, builtin_tys, |mid| {
             self.store
                 .borrow()
                 .module_interfaces
@@ -168,7 +164,6 @@ impl Compiler {
                 .unwrap()
         });
         self.diagnostics.borrow_mut().extend(diags);
-        res
     }
 
     pub fn expand_module(&self, mid: ModId) -> Res<Rc<Module>> {
@@ -227,14 +222,16 @@ impl Compiler {
             }
         }
 
-        let env = {
+        {
             let mut store = self.store.borrow_mut();
             let builtin_tys = store.builtin_tys.clone();
             self.pass_typecheck(
                 Rc::get_mut(store.modules.get_mut(&mid).unwrap()).expect("module should be unique"),
                 builtin_tys,
-            )
-        };
+            );
+        }
+
+        let env = self.store.borrow().get_mod(mid).unwrap().types.clone();
         Rc::get_mut(
             self.store
                 .borrow_mut()
@@ -243,10 +240,7 @@ impl Compiler {
                 .unwrap(),
         )
         .unwrap()
-        .types = Some(env.clone());
-        Rc::get_mut(self.store.borrow_mut().modules.get_mut(&mid).unwrap())
-            .unwrap()
-            .types = Some(env);
+        .types = env;
         Ok(())
     }
 

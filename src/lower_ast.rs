@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 use std::rc::Rc;
 
 use crate::{
@@ -8,11 +7,12 @@ use crate::{
     span::Span,
     syntax::{ast, parser},
     ty,
-    utils::Symbol,
+    utils::{Resolve, Symbol},
 };
 
 type PEnv<'p> = Env<'p, Symbol, Place>;
 
+#[derive(Clone, PartialEq, Eq)]
 enum Place {
     Local(ir::Local),
     Global(ast::Path),
@@ -43,36 +43,89 @@ pub fn lower_ast(
         builtin_tys,
         diagnostics: vec![],
         current_module: mod_.id,
-        //modules: vec![],
         current_path: vec![],
         body_builder: BodyBuilder::default(),
         bodys_stack: vec![],
         bodies: vec![],
+        lowered_mids: vec![],
+        exported_bindings: Env::default(),
     };
-    lowerer
-        .lower_ast(mod_)
-        .ok_or_else(|| std::mem::take(&mut lowerer.diagnostics))
+    lowerer.lower_ast(mod_);
+
+    if lowerer.diagnostics.iter().any(|d| d.level.is_error()) {
+        Err(std::mem::take(&mut lowerer.diagnostics))
+    } else {
+        Ok(ir::Package {
+            bodies: std::mem::take(&mut lowerer.bodies),
+        })
+    }
 }
 
 struct Lowerer<'i> {
     import: &'i dyn Fn(ast::ModId) -> Result<Rc<ast::Module>, Diagnostic>,
     intrinsics_mid: ast::ModId,
+
     builtin_tys: ty::BuiltinTys,
     diagnostics: Vec<Diagnostic>,
     current_module: ast::ModId,
-    //modules: Vec<ast::ModId>,
     current_path: Vec<Symbol>,
     body_builder: BodyBuilder,
     bodys_stack: Vec<BodyBuilder>,
     bodies: Vec<ir::Body>,
+    lowered_mids: Vec<ast::ModId>,
+    exported_bindings: Env<'static, ast::ModId, PEnv<'static>>,
 }
 
 impl Lowerer<'_> {
-    fn lower_ast(&mut self, mod_: &ast::Module) -> Option<ir::Package> {
-        self.lower_mod(mod_)
+    fn lower_ast(&mut self, mod_: &ast::Module) {
+        self.current_module = mod_.id;
+        if self.lowered_mids.contains(&mod_.id) {
+            return;
+        }
+
+        // Intrinsic modules have void as their bodies
+        if mod_.body.is_void() {
+            let mut exported = Env::default();
+            for key in mod_.exports.keys() {
+                exported.insert(
+                    key.into(),
+                    Place::Global(ast::Path {
+                        span: mod_.span,
+                        module: mod_.id,
+                        value: key.into(),
+                    }),
+                );
+            }
+            self.exported_bindings.insert(mod_.id, exported);
+            return;
+        }
+
+        for dep in &mod_.dependencies {
+            match (self.import)(*dep) {
+                Ok(m) => {
+                    self.lower_ast(&m);
+                }
+                Err(d) => {
+                    self.diagnostics.push(d);
+                    return;
+                }
+            }
+        }
+
+        self.current_module = mod_.id;
+        let mut env = self.lower_mod(mod_);
+        let mut exported = Env::default();
+        for key in mod_.exports.keys() {
+            let Some(place) = env.remove_immediate(key) else {
+                panic!("expected exported binding: {key}");
+            };
+
+            exported.insert(key.into(), place);
+        }
+        self.exported_bindings.insert(mod_.id, exported);
     }
 
-    fn lower_mod(&mut self, mod_: &ast::Module) -> Option<ir::Package> {
+    fn lower_mod(&mut self, mod_: &ast::Module) -> PEnv<'static> {
         let ast::ExprKind::Body(body) = &mod_.body.kind else {
             panic!("expected a body")
         };
@@ -80,7 +133,7 @@ impl Lowerer<'_> {
         self.body_builder
             .start(mod_.span, Rc::clone(&self.builtin_tys.void));
 
-        self.lower_mod_body(body);
+        let env = self.lower_mod_body(body);
 
         for b in &self.bodies {
             if b.name.module == mod_.id && &b.name.value == "@init" {
@@ -88,29 +141,26 @@ impl Lowerer<'_> {
             }
         }
 
-        self.body_builder
-            .terminate_block(ir::TerminatorKind::Return, mod_.span);
-        self.finish_body(BodyData {
-            span: mod_.span,
-            name: ast::Path {
-                span: mod_.span,
-                module: mod_.id,
-                value: "@init".into(),
-            },
-            param_count: 0,
-            variable_count: 0,
-        });
-
-        if self.diagnostics.is_empty() {
-            Some(ir::Package {
-                bodies: std::mem::take(&mut self.bodies),
-            })
+        if self.body_builder.bbs.is_empty() && self.body_builder.stmts.is_empty() {
+            self.body_builder.reset();
         } else {
-            None
+            self.body_builder
+                .terminate_block(ir::TerminatorKind::Return, mod_.span);
+            self.finish_body(BodyData {
+                span: mod_.span,
+                name: ast::Path {
+                    span: mod_.span,
+                    module: mod_.id,
+                    value: "@init".into(),
+                },
+                param_count: 0,
+                variable_count: 0,
+            });
         }
+        env
     }
 
-    fn lower_mod_body(&mut self, body: &[ast::Item]) {
+    fn lower_mod_body(&mut self, body: &[ast::Item]) -> PEnv<'static> {
         let mut _fns = vec![];
         let mut _vars = vec![];
         let mut exprs = vec![];
@@ -118,8 +168,6 @@ impl Lowerer<'_> {
 
         for item in body {
             match item {
-                ast::Item::Import(_, _) => todo!(),
-                ast::Item::Mod(_, _) => todo!(),
                 ast::Item::Define(d) => match &d.expr {
                     Some(e) if e.is_lambda() => {
                         _fns.push((d.span, &d.name, e));
@@ -131,6 +179,12 @@ impl Lowerer<'_> {
                 ast::Item::Expr(e) => {
                     exprs.push(e);
                 }
+                ast::Item::Import(mids, _) => {
+                    for mid in mids {
+                        self.import_mod(*mid, &mut env);
+                    }
+                }
+                ast::Item::Mod(_, _) => {}
             }
         }
 
@@ -155,6 +209,7 @@ impl Lowerer<'_> {
         for e in exprs {
             self.lower_expr(e, None, &env);
         }
+        env
     }
 
     fn lower_lambda(
@@ -193,7 +248,11 @@ impl Lowerer<'_> {
         let mut exprs = vec![];
         for i in b {
             match i {
-                ast::Item::Import(_, _) => todo!(),
+                ast::Item::Import(mids, _) => {
+                    for mid in mids {
+                        self.import_mod(*mid, &mut env);
+                    }
+                }
                 ast::Item::Mod(_, _) => todo!(),
                 ast::Item::Define(d) => _defs.push(d),
                 ast::Item::Expr(e) => exprs.push(e),
@@ -409,6 +468,16 @@ impl Lowerer<'_> {
 
     fn finish_body(&mut self, body_data: BodyData) {
         self.bodies.push(self.body_builder.finish(body_data));
+    }
+
+    fn import_mod(&self, mid: ast::ModId, env: &mut PEnv) {
+        let exported = self
+            .exported_bindings
+            .get(&mid)
+            .unwrap_or_else(|| panic!("module not found {}", mid.resolve()));
+        for (k, v) in exported.bindings() {
+            env.insert(k.into(), v.clone());
+        }
     }
 }
 
@@ -691,6 +760,41 @@ mod tests {
                             (arg _3 (0:48..2))
                             (call _1 _2 (0:44..7))
                             (return (0:0..51))))))
+                "#]],
+            );
+        }
+    }
+
+    mod module {
+        use super::*;
+
+        #[test]
+        fn identity_call() {
+            check(
+                "(module (id ()) (id)
+                   (import (rnrs expander core ()))
+                   (define id (lambda (x) x)))
+                 (import (id ()))
+                 (id #t)",
+                expect![[r#"
+                    (pkg
+                      (fn (|{|id| (id ()) 0:100..2}| [_1: object]) object (0:92..26)
+                        (let ([_0 object (0:92..26)]
+                              [_1 object (0:112..1)])
+                          (bb 0
+                            (copy _0 _1 (0:115..1))
+                            (return (0:92..26)))))
+                      (fn (|{|@init| (#script ()) 0:0..178}|) void (0:0..178)
+                        (let ([_0 void (0:0..178)]
+                              [_1 object (0:171..7)]
+                              [_2 (-> object object) (0:172..2)]
+                              [_3 boolean (0:175..2)])
+                          (bb 0
+                            (addressof _2 |{|id| (id ()) 0:100..2}| (0:172..2))
+                            (loadI _3 1 (0:175..2))
+                            (arg _3 (0:175..2))
+                            (call _1 _2 (0:171..7))
+                            (return (0:0..178))))))
                 "#]],
             );
         }

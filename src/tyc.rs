@@ -21,7 +21,7 @@ pub fn typecheck_module(
     module: &mut ast::Module,
     builtins: BuiltinTys,
     get_mod_interface: impl Fn(ast::ModId) -> Rc<ast::ModuleInterface>,
-) -> (Env<'static, String, Rc<Ty>>, Vec<Diagnostic>) {
+) -> Vec<Diagnostic> {
     let mut tc = TypeChecker {
         module: module.id,
         builtins,
@@ -29,7 +29,8 @@ pub fn typecheck_module(
         get_mod_interface: &get_mod_interface,
     };
     let tys = tc.mod_(module);
-    (tys, tc.diagnostics)
+    module.types = Some(tys);
+    tc.diagnostics
 }
 
 impl TypeChecker<'_> {
@@ -38,7 +39,8 @@ impl TypeChecker<'_> {
 
         let ast::ExprKind::Body(body) = &mut mod_.body.kind else {
             panic!(
-                "expected a letrec as the body of a module: {:#?}",
+                "expected a letrec as the body of a module: {:#?} - {:#?}",
+                mod_.id.resolve(),
                 mod_.body
             );
         };

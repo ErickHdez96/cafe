@@ -335,6 +335,10 @@ impl Expr {
     pub fn is_lambda(&self) -> bool {
         matches!(self.kind, ExprKind::Lambda { .. })
     }
+
+    pub fn is_void(&self) -> bool {
+        matches!(self.kind, ExprKind::Void)
+    }
 }
 
 impl fmt::Debug for Expr {
