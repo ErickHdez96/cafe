@@ -1,13 +1,14 @@
 use std::fmt::Write;
 use std::hash::Hash;
 
-pub type Symbol = String;
+use crate::symbol::Symbol;
 
-pub fn mangle_symbol(symbol: &Symbol) -> Symbol {
-    if !symbol.contains(' ') {
-        symbol.clone()
+pub fn mangle_symbol(symbol: Symbol) -> Symbol {
+    let sym = symbol.resolve();
+    if !sym.contains(' ') {
+        symbol
     } else {
-        let paths = symbol.split(' ');
+        let paths = sym.split(' ');
         paths
             .into_iter()
             .fold(String::from("_T"), |mut out, p| {

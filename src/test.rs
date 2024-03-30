@@ -13,13 +13,14 @@ use crate::{
     lower_ast::lower_ast,
     rnrs::{core_expander_interface, intrinsics_interface},
     span::Span,
+    symbol::Symbol,
     syntax::{
         ast,
         parser::{parse_str, ParseResult},
     },
     ty::{self, BuiltinTys},
     tyc::typecheck_module,
-    utils::{Resolve, Symbol},
+    utils::Resolve,
 };
 
 pub fn rnrs_env() -> Env<'static, Symbol, Binding> {

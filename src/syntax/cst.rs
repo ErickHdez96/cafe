@@ -1,6 +1,6 @@
 use std::{fmt, rc::Rc};
 
-use crate::{span::Span, utils::Symbol};
+use crate::{span::Span, symbol::Symbol};
 
 use super::scanner::Token;
 
@@ -60,7 +60,7 @@ impl Cst {
             | CstKind::String(s)
             | CstKind::Number(s)
             | CstKind::SingleComment(s)
-            | CstKind::MultiComment(s) => s.len(),
+            | CstKind::MultiComment(s) => s.resolve().len(),
         }
     }
 
@@ -85,9 +85,9 @@ impl Cst {
         }
     }
 
-    pub fn to_ident(&self) -> Option<&Symbol> {
+    pub fn to_ident(&self) -> Option<Symbol> {
         match &self.kind {
-            CstKind::Ident(ident) => Some(ident),
+            CstKind::Ident(ident) => Some(*ident),
             _ => None,
         }
     }

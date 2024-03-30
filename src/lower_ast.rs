@@ -5,9 +5,10 @@ use crate::{
     env::Env,
     ir,
     span::Span,
+    symbol::Symbol,
     syntax::{ast, parser},
     ty,
-    utils::{Resolve, Symbol},
+    utils::Resolve,
 };
 
 type PEnv<'p> = Env<'p, Symbol, Place>;
@@ -86,13 +87,13 @@ impl Lowerer<'_> {
         // Intrinsic modules have void as their bodies
         if mod_.body.is_void() {
             let mut exported = Env::default();
-            for key in mod_.exports.keys() {
+            for key in mod_.exports.keys().copied() {
                 exported.insert(
-                    key.into(),
+                    key,
                     Place::Global(ast::Path {
                         span: mod_.span,
                         module: mod_.id,
-                        value: key.into(),
+                        value: key,
                     }),
                 );
             }
@@ -115,12 +116,12 @@ impl Lowerer<'_> {
         self.current_module = mod_.id;
         let mut env = self.lower_mod(mod_);
         let mut exported = Env::default();
-        for key in mod_.exports.keys() {
-            let Some(place) = env.remove_immediate(key) else {
+        for key in mod_.exports.keys().copied() {
+            let Some(place) = env.remove_immediate(&key) else {
                 panic!("expected exported binding: {key}");
             };
 
-            exported.insert(key.into(), place);
+            exported.insert(key, place);
         }
         self.exported_bindings.insert(mod_.id, exported);
     }
@@ -129,6 +130,7 @@ impl Lowerer<'_> {
         let ast::ExprKind::Body(body) = &mod_.body.kind else {
             panic!("expected a body")
         };
+        let init = "@init".into();
 
         self.body_builder
             .start(mod_.span, Rc::clone(&self.builtin_tys.void));
@@ -136,7 +138,7 @@ impl Lowerer<'_> {
         let env = self.lower_mod_body(body);
 
         for b in &self.bodies {
-            if b.name.module == mod_.id && &b.name.value == "@init" {
+            if b.name.module == mod_.id && b.name.value == init {
                 todo!("@init not allowed yet: {:?}", b.name);
             }
         }
@@ -199,7 +201,7 @@ impl Lowerer<'_> {
             };
 
             let global = self.lower_lambda(fn_.1, formals, rest.as_ref(), expr, fn_.0, &env);
-            env.insert(fn_.1.value.clone(), global.into());
+            env.insert(fn_.1.value, global.into());
         }
 
         for var_ in _vars {
@@ -230,14 +232,14 @@ impl Lowerer<'_> {
             let local = self
                 .body_builder
                 .alloc(f.span, Rc::clone(&self.builtin_tys.object));
-            env.insert(f.value.clone(), local.into());
+            env.insert(f.value, local.into());
         }
 
         if let Some(rest) = rest {
             let local = self
                 .body_builder
                 .alloc(rest.span, Rc::clone(&self.builtin_tys.object));
-            env.insert(rest.value.clone(), local.into());
+            env.insert(rest.value, local.into());
         }
 
         let ast::ExprKind::Body(b) = &body.kind else {
@@ -277,7 +279,7 @@ impl Lowerer<'_> {
         let lambda_name = self.lambda_name(name);
         self.finish_body(BodyData {
             span,
-            name: lambda_name.clone(),
+            name: lambda_name,
             param_count: formals.len() + if rest.is_some() { 1 } else { 0 },
             variable_count: 0,
         });
@@ -337,7 +339,7 @@ impl Lowerer<'_> {
                         self.body_builder.copy(l, *loc, expr.span);
                     }
                     Place::Global(g) => {
-                        self.body_builder.load_label(l, g.clone(), expr.span);
+                        self.body_builder.load_label(l, *g, expr.span);
                     }
                 }
 
@@ -450,9 +452,19 @@ impl Lowerer<'_> {
             span: name.span,
             module: self.current_module,
             value: if self.current_path.is_empty() {
-                name.value.clone()
+                name.value
             } else {
-                format!("{}#{}", self.current_path.join("#"), name.value)
+                format!(
+                    "{}#{}",
+                    self.current_path
+                        .iter()
+                        .copied()
+                        .map(Symbol::resolve)
+                        .collect::<Vec<_>>()
+                        .join("#"),
+                    name.value
+                )
+                .into()
             },
         }
     }
@@ -476,7 +488,7 @@ impl Lowerer<'_> {
             .get(&mid)
             .unwrap_or_else(|| panic!("module not found {}", mid.resolve()));
         for (k, v) in exported.bindings() {
-            env.insert(k.into(), v.clone());
+            env.insert(*k, v.clone());
         }
     }
 }

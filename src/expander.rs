@@ -6,13 +6,13 @@ use crate::{
     expander::intrinsics::import,
     file::FileId,
     span::Span,
+    symbol::Symbol,
     syntax::{
         ast::{self, Item},
         cst::{Cst, CstKind, ListKind, Prefix},
         parser::{parse_char, parse_number, Number},
     },
     ty,
-    utils::Symbol,
 };
 
 use self::{
@@ -26,9 +26,9 @@ pub mod intrinsics;
 pub mod scopes;
 
 type SynList = Source;
-type CoreDefTransformer = fn(&mut Expander, SynList, Span, &mut Env<String, Binding>) -> Item;
-type CoreExprTransformer = fn(&mut Expander, SynList, Span, &mut Env<String, Binding>) -> Item;
-type BEnv<'parent> = Env<'parent, String, Binding>;
+type CoreDefTransformer = fn(&mut Expander, SynList, Span, &mut Env<Symbol, Binding>) -> Item;
+type CoreExprTransformer = fn(&mut Expander, SynList, Span, &mut Env<Symbol, Binding>) -> Item;
+type BEnv<'parent> = Env<'parent, Symbol, Binding>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExpanderResult {
@@ -191,16 +191,16 @@ impl Expander<'_> {
                 ty: Rc::clone(&self.none_ty),
             }
             .into(),
-            CstKind::Ident(ident) => self.expand_ident(ident, span, env),
+            CstKind::Ident(ident) => self.expand_ident(*ident, span, env),
             CstKind::Char(c) => ast::Expr {
                 span,
-                kind: ast::ExprKind::Char(parse_char(c)),
+                kind: ast::ExprKind::Char(parse_char(c.resolve())),
                 ty: Rc::clone(&self.none_ty),
             }
             .into(),
             CstKind::Number(n) => ast::Expr {
                 span,
-                kind: ast::ExprKind::Number(match parse_number(n, span) {
+                kind: ast::ExprKind::Number(match parse_number(n.resolve(), span) {
                     Ok(n) => n,
                     Err(d) => {
                         self.diagnostics.push(d);
@@ -281,14 +281,14 @@ impl Expander<'_> {
         }
     }
 
-    fn expand_ident(&mut self, ident: &Symbol, span: Span, env: &BEnv) -> Item {
-        match env.get(ident) {
+    fn expand_ident(&mut self, ident: Symbol, span: Span, env: &BEnv) -> Item {
+        match env.get(&ident) {
             Some(Binding::Value { orig_module, .. }) => ast::Expr {
                 span,
                 kind: ast::ExprKind::Var(ast::Path {
                     span,
                     module: *orig_module,
-                    value: ident.into(),
+                    value: ident,
                 }),
                 ty: Rc::clone(&self.none_ty),
             }
@@ -300,7 +300,7 @@ impl Expander<'_> {
                     kind: ast::ExprKind::Var(ast::Path {
                         span,
                         module: self.module,
-                        value: ident.into(),
+                        value: ident,
                     }),
                     ty: Rc::clone(&self.none_ty),
                 }
@@ -388,7 +388,7 @@ impl Source {
         match self.source.get_mut(self.offset) {
             Some(syn) => {
                 self.offset += 1;
-                Some(syn.clone())
+                Some(Rc::clone(syn))
             }
             None => None,
         }
@@ -1003,7 +1003,7 @@ mod tests {
                     .map(|mid| mid.resolve().clone())
                     .collect::<Vec<_>>(),
                 vec![ast::ModuleName {
-                    paths: vec![String::from("ID")],
+                    paths: vec![Symbol::from("ID")],
                     versions: vec![],
                 }]
             );
@@ -1035,7 +1035,7 @@ mod tests {
                     .map(|mid| mid.resolve().clone())
                     .collect::<Vec<_>>(),
                 vec![ast::ModuleName {
-                    paths: vec![String::from("rnrs"), String::from("base")],
+                    paths: vec![Symbol::from("rnrs"), Symbol::from("base")],
                     versions: vec![],
                 }]
             );
@@ -1090,9 +1090,9 @@ mod tests {
                     .collect::<Vec<_>>(),
                 vec![ast::ModuleName {
                     paths: vec![
-                        String::from("rnrs"),
-                        String::from("expander"),
-                        String::from("core")
+                        Symbol::from("rnrs"),
+                        Symbol::from("expander"),
+                        Symbol::from("core")
                     ],
                     versions: vec![],
                 }]

@@ -2,6 +2,7 @@ use crate::{
     env::Env,
     expander::{expand_module_with_config, ExpanderConfig, Source},
     span::Span,
+    symbol::Symbol,
     syntax::{
         ast,
         cst::{CstKind, ListKind},
@@ -13,13 +14,13 @@ use super::{binding::Binding, scopes::Scopes, BEnv, Expander, SynList};
 pub fn intrinsics_env() -> BEnv<'static> {
     Env::from_iter(vec![
         (
-            String::from("import"),
+            Symbol::from("import"),
             Binding::Import {
                 scopes: Scopes::core(),
             },
         ),
         (
-            String::from("module"),
+            Symbol::from("module"),
             Binding::Module {
                 scopes: Scopes::core(),
             },
@@ -49,7 +50,7 @@ pub fn import(
                     if env.has_immediate(v) {
                         todo!()
                     } else {
-                        env.insert(v.clone(), b.clone());
+                        env.insert(*v, b.clone());
                     }
                 }
             }
@@ -91,7 +92,7 @@ pub fn module(expander: &mut Expander<'_>, mut source: SynList, _span: Span) -> 
     expander.diagnostics.extend(result.diagnostics);
     result.module.exports = Env::from_iter(exports.into_iter().map(|e| {
         (
-            e.value.clone(),
+            e.value,
             result.module.bindings.get(&e.value).unwrap().clone(),
         )
     }));
@@ -109,7 +110,7 @@ fn parse_module_name(_expander: &mut Expander<'_>, mut source: Source) -> ast::M
                 assert!(source.next().is_none());
                 assert!(source.dot().next().is_none());
             }
-            CstKind::Ident(ident) => symbols.push(ident.clone()),
+            CstKind::Ident(ident) => symbols.push(*ident),
             k => todo!("{k:?}"),
         }
     }
@@ -123,7 +124,7 @@ fn parse_export_identifiers(_expander: &mut Expander<'_>, mut source: Source) ->
         .by_ref()
         .map(|c| ast::Ident {
             span: c.span,
-            value: c.to_ident().unwrap().clone(),
+            value: c.to_ident().unwrap(),
         })
         .collect();
     assert!(source.next().is_none());

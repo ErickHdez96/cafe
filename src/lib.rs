@@ -1,3 +1,4 @@
+mod arena;
 pub mod asm;
 pub mod atty;
 pub mod codegen;
@@ -12,6 +13,7 @@ pub mod ir;
 pub mod lower_ast;
 pub mod rnrs;
 pub mod span;
+mod symbol;
 pub mod syntax;
 #[cfg(test)]
 mod test;

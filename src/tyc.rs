@@ -3,12 +3,13 @@ use std::rc::Rc;
 use crate::{
     diagnostics::Diagnostic,
     env::Env,
+    symbol::Symbol,
     syntax::{ast, parser},
     ty::{BuiltinTys, Ty, TyCo},
     utils::Resolve,
 };
 
-type TyCoEnv<'tyc> = Env<'tyc, String, TyCo>;
+type TyCoEnv<'tyc> = Env<'tyc, Symbol, TyCo>;
 
 struct TypeChecker<'tyc> {
     module: ast::ModId,
@@ -34,7 +35,7 @@ pub fn typecheck_module(
 }
 
 impl TypeChecker<'_> {
-    fn mod_(&mut self, mod_: &mut ast::Module) -> Env<'static, String, Rc<Ty>> {
+    fn mod_(&mut self, mod_: &mut ast::Module) -> Env<'static, Symbol, Rc<Ty>> {
         let mut tys = Env::default();
 
         let ast::ExprKind::Body(body) = &mut mod_.body.kind else {
@@ -50,10 +51,7 @@ impl TypeChecker<'_> {
                 ast::Item::Import(_, _) => {}
                 ast::Item::Mod(_, _) => {}
                 ast::Item::Define(d) => {
-                    tys.insert(
-                        d.name.value.clone(),
-                        TyCo::Ty(Rc::clone(&self.builtins.object)),
-                    );
+                    tys.insert(d.name.value, TyCo::Ty(Rc::clone(&self.builtins.object)));
                     if let Some(e) = &mut d.expr {
                         self.expr(e, &mut tys);
                         if let Some(ty) = tys.get_immediate_mut(&d.name.value) {
@@ -83,10 +81,7 @@ impl TypeChecker<'_> {
                         ast::Item::Import(_, _) => {}
                         ast::Item::Mod(_, _) => {}
                         ast::Item::Define(d) => {
-                            tyenv.insert(
-                                d.name.value.clone(),
-                                TyCo::Ty(Rc::clone(&self.builtins.object)),
-                            );
+                            tyenv.insert(d.name.value, TyCo::Ty(Rc::clone(&self.builtins.object)));
                             if let Some(e) = &mut d.expr {
                                 self.expr(e, &mut tyenv);
                                 if let Some(ty) = tyenv.get_immediate_mut(&d.name.value) {
@@ -172,11 +167,11 @@ impl TypeChecker<'_> {
         let mut tyenv = tyenv.enter();
         for f in formals {
             if !tyenv.has_immediate(&f.value) {
-                tyenv.insert(f.value.clone(), TyCo::Ty(Rc::clone(&self.builtins.object)));
+                tyenv.insert(f.value, TyCo::Ty(Rc::clone(&self.builtins.object)));
             }
         }
         if let Some(r) = rest {
-            tyenv.insert(r.value.clone(), TyCo::from_ty(&self.builtins.object));
+            tyenv.insert(r.value, TyCo::from_ty(&self.builtins.object));
         }
         let ty = self.expr(expr, &mut tyenv);
         Rc::new(Ty::Lambda {

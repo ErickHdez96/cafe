@@ -2,8 +2,9 @@ use crate::{
     asm::{Condition, Direction, Inst, Register, ISA},
     ir,
     span::Span,
+    symbol::Symbol,
     syntax::ast,
-    utils::{mangle_symbol, Resolve, Symbol},
+    utils::{mangle_symbol, Resolve},
 };
 
 pub fn codegen(ir: ir::Package) -> Vec<Inst> {
@@ -204,11 +205,11 @@ impl Codegen {
         let symbol = canonicalize_symbol(label);
         self.output.push(Inst::new(
             span,
-            format!("\tadrp {}, {}@PAGE", reg, mangle_symbol(&symbol)),
+            format!("\tadrp {}, {}@PAGE", reg, mangle_symbol(symbol)),
         ));
         self.output.push(Inst::new(
             span,
-            format!("\tadd {}, {}, {}@PAGEOFF", reg, reg, mangle_symbol(&symbol)),
+            format!("\tadd {}, {}, {}@PAGEOFF", reg, reg, mangle_symbol(symbol)),
         ));
     }
 
@@ -223,8 +224,8 @@ impl Codegen {
     fn gen_body(&mut self, mut body: ir::Body) {
         let label = canonicalize_symbol(&body.name);
         self.emit(Inst::pseudo_align(Self::FUNCTION_ALIGNMENT));
-        self.emit(Inst::pseudo_global(&label));
-        self.emit(Inst::pseudo_label(&label));
+        self.emit(Inst::pseudo_global(label));
+        self.emit(Inst::pseudo_label(label));
 
         ISA::process_body(&mut body);
         self.locals_stack = body
@@ -240,7 +241,7 @@ impl Codegen {
     }
 
     fn gen_basic_block(&mut self, bb: &ir::BasicBlockData, body: &ir::Body) {
-        self.emit(Inst::pseudo_label(&bb.idx.to_string().into()));
+        self.emit(Inst::pseudo_label(bb.idx.to_string().into()));
 
         for stmt in &bb.statements {
             self.gen_statement(stmt);
@@ -362,7 +363,7 @@ impl Codegen {
             }
             ir::StatementKind::CallLabel(dst, label) => {
                 let reg = self.get_register_for_local(*dst);
-                self.emit(Inst::call_label(&label.value, stmt.span));
+                self.emit(Inst::call_label(label.value, stmt.span));
                 self.free_args();
                 if !dst.is_return() {
                     if self.get_local_size(*dst) > 0 {
@@ -378,7 +379,7 @@ impl Codegen {
     fn gen_terminator(&mut self, srcidx: usize, term: &ir::Terminator, body: &ir::Body) {
         match term.kind {
             ir::TerminatorKind::Goto(dstidx) => self.emit(Inst::jump(
-                &dstidx.value().to_string().into(),
+                dstidx.value().to_string().into(),
                 if dstidx.value() <= srcidx {
                     Direction::Backwards
                 } else {
@@ -398,7 +399,7 @@ impl Codegen {
                 let reg = self.load_local(cond, term.span);
                 self.emit(Inst::cmp_immediate(reg, 0, term.span));
                 self.emit(Inst::jump_cond(
-                    &true_label.value().to_string().into(),
+                    true_label.value().to_string().into(),
                     if true_label.value() <= srcidx {
                         Direction::Backwards
                     } else {
@@ -408,7 +409,7 @@ impl Codegen {
                     term.span,
                 ));
                 self.emit(Inst::jump(
-                    &false_label.value().to_string().into(),
+                    false_label.value().to_string().into(),
                     if false_label.value() <= srcidx {
                         Direction::Backwards
                     } else {
@@ -474,9 +475,9 @@ pub fn canonicalize_symbol(path: &ast::Path) -> Symbol {
     let mut parent_path = mod_name
         .paths
         .iter()
-        .map(|s| s.as_str())
+        .map(|s| s.resolve())
         .collect::<Vec<&str>>();
-    parent_path.push(&path.value);
+    parent_path.push(path.value.resolve());
     parent_path.join(" ").into()
 }
 

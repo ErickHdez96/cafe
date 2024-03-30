@@ -1,12 +1,7 @@
 use core::fmt;
 use std::fmt::Display;
 
-use crate::{
-    align, ir,
-    span::Span,
-    ty,
-    utils::{mangle_symbol, Symbol},
-};
+use crate::{align, ir, span::Span, symbol::Symbol, ty, utils::mangle_symbol};
 
 use super::{Inst, Register, TyArch, ISA};
 
@@ -121,14 +116,14 @@ impl Inst {
     /// ```text
     /// .global {label}
     /// ```
-    pub fn pseudo_global(label: &Symbol) -> Self {
+    pub fn pseudo_global(label: Symbol) -> Self {
         Inst::new(Span::dummy(), format!(".global {}", mangle_symbol(label)))
     }
 
     /// ```text
     /// {label}:
     /// ```
-    pub fn pseudo_label(label: &Symbol) -> Self {
+    pub fn pseudo_label(label: Symbol) -> Self {
         Inst::new(Span::dummy(), format!("{}:", mangle_symbol(label)))
     }
 
@@ -209,7 +204,7 @@ impl Inst {
     /// ```text
     /// bl {label}
     /// ```
-    pub fn call_label(label: &Symbol, span: Span) -> Self {
+    pub fn call_label(label: Symbol, span: Span) -> Self {
         Self {
             span,
             value: format!("\tbl {}", mangle_symbol(label)),
@@ -219,7 +214,7 @@ impl Inst {
     /// ```text
     /// b {label}{direction}
     /// ```
-    pub fn jump(label: &Symbol, direction: Direction, span: Span) -> Self {
+    pub fn jump(label: Symbol, direction: Direction, span: Span) -> Self {
         Self {
             span,
             value: format!("\tb {}{}", label, direction),
@@ -229,7 +224,7 @@ impl Inst {
     /// ```text
     /// b.{cond} {label}{direction}
     /// ```
-    pub fn jump_cond(label: &Symbol, direction: Direction, cond: Condition, span: Span) -> Self {
+    pub fn jump_cond(label: Symbol, direction: Direction, cond: Condition, span: Span) -> Self {
         Self {
             span,
             value: format!("\tb.{} {}{}", cond, label, direction),
@@ -489,8 +484,8 @@ impl ISA {
     fn add_primitive() -> Vec<Inst> {
         vec![
             Inst::pseudo_align(4),
-            Inst::pseudo_global(&"add".into()),
-            Inst::pseudo_label(&"add".into()),
+            Inst::pseudo_global("add".into()),
+            Inst::pseudo_label("add".into()),
             Inst::new(Span::dummy(), String::from("\tadd x0, x0, x1")),
             Inst::new(Span::dummy(), String::from("\tret lr")),
         ]
@@ -507,8 +502,8 @@ impl ISA {
     fn char_to_utf8() -> Vec<Inst> {
         vec![
             Inst::pseudo_align(4),
-            Inst::pseudo_global(&"char_to_utf8".into()),
-            Inst::pseudo_label(&"char_to_utf8".into()),
+            Inst::pseudo_global("char_to_utf8".into()),
+            Inst::pseudo_label("char_to_utf8".into()),
             Inst::new(
                 Span::dummy(),
                 String::from("\tcmp     w0, #127		// Can the character fit in 1 byte?"),
@@ -526,7 +521,7 @@ impl ISA {
                 String::from("\tstrb    w0, [x1]		// buf[0] = c // and can be written as-is"),
             ),
             Inst::new(Span::dummy(), String::from("\tret")),
-            Inst::pseudo_label(&"2".into()),
+            Inst::pseudo_label("2".into()),
             Inst::new(
                 Span::dummy(),
                 String::from("\tcmp     w0, #2047		// Can the character fit in 2 bytes?"),
@@ -550,7 +545,7 @@ impl ISA {
                 String::from("\tstrb    w10, [x1, #1]		// buf[1] = (c & 0x3f) | 0x80"),
             ),
             Inst::new(Span::dummy(), String::from("\tret")),
-            Inst::pseudo_label(&"3".into()),
+            Inst::pseudo_label("3".into()),
             Inst::new(Span::dummy(), String::from("\tlsr     w8, w0, #16")),
             Inst::new(
                 Span::dummy(),
@@ -582,7 +577,7 @@ impl ISA {
                 String::from("\tstrb    w10, [x1, #2]		// buf[2] = (c & 0x3f) | 0x80"),
             ),
             Inst::new(Span::dummy(), String::from("\tret")),
-            Inst::pseudo_label(&"4".into()),
+            Inst::pseudo_label("4".into()),
             Inst::new(Span::dummy(), String::from("\tmov     w9, #4")),
             Inst::new(Span::dummy(), String::from("\tlsr     w8, w0, #18")),
             Inst::new(Span::dummy(), String::from("\tmov     w10, #0x80")),
@@ -630,8 +625,8 @@ impl ISA {
 
         vec![
             Inst::pseudo_align(4),
-            Inst::pseudo_global(&"_main".into()),
-            Inst::pseudo_label(&"_main".into()),
+            Inst::pseudo_global("_main".into()),
+            Inst::pseudo_label("_main".into()),
             // Allocate space for the frame pointer.
             Inst::new(Span::dummy(), String::from("\tsub sp, sp, #16")),
             // Store fp and lr, as the stack needs to be 16-byte aligned.
@@ -648,8 +643,8 @@ impl ISA {
     fn write_char_primitive() -> Vec<Inst> {
         vec![
             Inst::pseudo_align(4),
-            Inst::pseudo_global(&"write_char".into()),
-            Inst::pseudo_label(&"write_char".into()),
+            Inst::pseudo_global("write_char".into()),
+            Inst::pseudo_label("write_char".into()),
             Inst::new(Span::dummy(), String::from("\tsub sp, sp, #32")),
             Inst::new(Span::dummy(), String::from("\tstp x29, x30, [sp, #16]")),
             Inst::new(Span::dummy(), String::from("\tadd x29, sp, #16")),
@@ -675,7 +670,7 @@ impl ISA {
             Inst::new(Span::dummy(), String::from("\tb.LO .end")),
             Inst::new(Span::dummy(), String::from("\tldr x0, [sp, #11]")),
             Inst::new(Span::dummy(), String::from("\tbl _putchar")),
-            Inst::pseudo_label(&".end".into()),
+            Inst::pseudo_label(".end".into()),
             Inst::new(Span::dummy(), String::from("\tldp x29, x30, [sp, #16]")),
             Inst::new(Span::dummy(), String::from("\tadd sp, sp, #32")),
             Inst::new(Span::dummy(), String::from("\tret")),

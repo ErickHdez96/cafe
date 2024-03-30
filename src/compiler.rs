@@ -11,6 +11,7 @@ use crate::{
     },
     file::{FileId, SourceFile},
     rnrs::{core_expander_interface, intrinsics_interface},
+    symbol::Symbol,
     syntax::{
         ast::{ModId, Module, ModuleInterface, ModuleName},
         cst::Cst,
@@ -27,7 +28,7 @@ pub type Res<T> = Result<T, Diagnostic>;
 pub struct Compiler {
     pub config: CompilerConfig,
     store: RefCell<Store>,
-    env: Env<'static, String, Binding>,
+    env: Env<'static, Symbol, Binding>,
     diagnostics: RefCell<Vec<Diagnostic>>,
 }
 
@@ -75,7 +76,14 @@ impl Compiler {
             Some(fid) => Ok(fid),
             None => {
                 let mut path = std::env::current_dir().unwrap();
-                let mod_paths = mid.resolve().paths.join(std::path::MAIN_SEPARATOR_STR);
+                let mod_paths = mid
+                    .resolve()
+                    .paths
+                    .iter()
+                    .copied()
+                    .map(Symbol::resolve)
+                    .collect::<Vec<_>>()
+                    .join(std::path::MAIN_SEPARATOR_STR);
                 path.push(mod_paths);
                 path.set_extension("scm");
                 if path.exists() {
@@ -184,7 +192,7 @@ impl Compiler {
                 self.diagnostics.borrow_mut().extend(diagnostics);
                 let mid = if self.get_mod(mid).is_some() {
                     let mut paths = mid.resolve().paths.clone();
-                    paths.push(String::from("#script"));
+                    paths.push(Symbol::from("#script"));
                     ModuleName::from_strings(paths)
                 } else {
                     mid

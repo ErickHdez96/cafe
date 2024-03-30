@@ -5,6 +5,7 @@ use crate::{
     expander::binding::Binding,
     new_id,
     span::Span,
+    symbol::Symbol,
     ty::Ty,
     utils::{Intern, Resolve},
 };
@@ -21,10 +22,10 @@ pub struct Module {
     pub span: Span,
     pub dependencies: Vec<ModId>,
     /// Bindings exported from the Module.
-    pub exports: Env<'static, String, Binding>,
+    pub exports: Env<'static, Symbol, Binding>,
     /// All the root bindings (e.g. macro, value) of the module.
-    pub bindings: Env<'static, String, Binding>,
-    pub types: Option<Env<'static, String, Rc<Ty>>>,
+    pub bindings: Env<'static, Symbol, Binding>,
+    pub types: Option<Env<'static, Symbol, Rc<Ty>>>,
     pub body: Expr,
 }
 
@@ -49,8 +50,8 @@ pub struct ModuleInterface {
     pub span: Span,
     // TODO: bring Binding here
     /// Exported bindings.
-    pub bindings: Env<'static, String, Binding>,
-    pub types: Option<Env<'static, String, Rc<Ty>>>,
+    pub bindings: Env<'static, Symbol, Binding>,
+    pub types: Option<Env<'static, Symbol, Rc<Ty>>>,
     pub dependencies: Vec<ModId>,
 }
 
@@ -58,7 +59,7 @@ pub struct ModuleInterface {
 /// valid identifiers, and its optional version (e.g. 1 0 1).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ModuleName {
-    pub paths: Vec<String>,
+    pub paths: Vec<Symbol>,
     pub versions: Vec<usize>,
 }
 
@@ -67,13 +68,13 @@ impl ModuleName {
     /// project.
     pub fn script() -> ModId {
         Self {
-            paths: vec![String::from("#script")],
+            paths: vec![Symbol::from("#script")],
             versions: vec![],
         }
         .intern()
     }
 
-    pub fn from_strings(strs: Vec<impl Into<String>>) -> ModId {
+    pub fn from_strings(strs: Vec<impl Into<Symbol>>) -> ModId {
         Self {
             paths: strs.into_iter().map(|s| s.into()).collect(),
             versions: vec![],
@@ -87,7 +88,12 @@ impl fmt::Display for ModuleName {
         write!(
             f,
             "({}{}({}))",
-            self.paths.join(" "),
+            self.paths
+                .iter()
+                .copied()
+                .map(Symbol::resolve)
+                .collect::<Vec<_>>()
+                .join(" "),
             if self.paths.is_empty() { "" } else { " " },
             self.versions
                 .iter()
@@ -101,7 +107,7 @@ impl fmt::Display for ModuleName {
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Ident {
     pub span: Span,
-    pub value: String,
+    pub value: Symbol,
 }
 
 impl fmt::Debug for Ident {
@@ -124,11 +130,11 @@ impl fmt::Display for Ident {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Path {
     pub span: Span,
     pub module: ModId,
-    pub value: String,
+    pub value: Symbol,
 }
 
 impl fmt::Debug for Path {

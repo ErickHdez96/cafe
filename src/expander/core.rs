@@ -22,18 +22,18 @@ pub fn define_transformer(
             CstKind::List(_, ListKind::List) => todo!(),
             CstKind::Ident(ident) => ast::Ident {
                 span: cst.span,
-                value: ident.into(),
+                value: *ident,
             },
             _ => todo!(),
         },
         None => todo!(),
     };
     env.insert(
-        name.value.clone(),
+        name.value,
         Binding::Value {
             scopes: Scopes::core(),
             orig_module: expander.current_module(),
-            name: name.value.clone(),
+            name: name.value,
         },
     );
     let expr = expander
@@ -139,13 +139,15 @@ fn quote_expander(expander: &mut Expander<'_>, cst: Rc<Cst>) -> ast::Expr {
             CstKind::Ident(ident) => ast::ExprKind::Var(ast::Path {
                 span: cst.span,
                 module: expander.current_module(),
-                value: ident.into(),
+                value: *ident,
             }),
-            CstKind::Char(c) => ast::ExprKind::Char(parse_char(c)),
-            CstKind::Number(n) => ast::ExprKind::Number(match parse_number(n, cst.span) {
-                Ok(n) => n,
-                Err(_) => todo!(),
-            }),
+            CstKind::Char(c) => ast::ExprKind::Char(parse_char(c.resolve())),
+            CstKind::Number(n) => {
+                ast::ExprKind::Number(match parse_number(n.resolve(), cst.span) {
+                    Ok(n) => n,
+                    Err(_) => todo!(),
+                })
+            }
             CstKind::String(_) => todo!(),
             k => todo!("{k:?}"),
         },
@@ -163,21 +165,21 @@ pub fn lambda_transformer(
     let (formals, rest) = formals_transformer(expander, source.nth(1).unwrap());
     for f in &formals {
         env.insert(
-            f.value.clone(),
+            f.value,
             Binding::Value {
                 scopes: Scopes::core(),
                 orig_module: expander.current_module(),
-                name: f.value.clone(),
+                name: f.value,
             },
         );
     }
     if let Some(rest) = &rest {
         env.insert(
-            rest.value.clone(),
+            rest.value,
             Binding::Value {
                 scopes: Scopes::core(),
                 orig_module: expander.current_module(),
-                name: rest.value.clone(),
+                name: rest.value,
             },
         );
     }
@@ -220,7 +222,7 @@ fn formals_transformer(
                     CstKind::Ident(ident) => {
                         formals.push(ast::Ident {
                             span: cst.span,
-                            value: ident.into(),
+                            value: *ident,
                         });
                     }
                     _ => todo!(),
@@ -230,7 +232,7 @@ fn formals_transformer(
                 Some(cst) => match &cst.kind {
                     CstKind::Ident(ident) => Some(ast::Ident {
                         span: cst.span,
-                        value: ident.into(),
+                        value: *ident,
                     }),
                     _ => todo!(),
                 },
@@ -242,7 +244,7 @@ fn formals_transformer(
             vec![],
             Some(ast::Ident {
                 span: cst.span,
-                value: ident.into(),
+                value: *ident,
             }),
         ),
         _ => todo!(),

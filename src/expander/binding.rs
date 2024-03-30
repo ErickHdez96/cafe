@@ -1,6 +1,6 @@
 use std::cell::Cell;
 
-use crate::syntax::ast;
+use crate::{symbol::Symbol, syntax::ast};
 
 use super::{scopes::Scopes, CoreDefTransformer, CoreExprTransformer};
 
@@ -15,7 +15,7 @@ pub enum Binding {
         /// The [`Module`] where it comes from. Macros uses may introduce bindings from other
         /// modules without needing to import them.
         orig_module: ast::ModId,
-        name: String,
+        name: Symbol,
     },
     /// Built-in importer binding.
     Import { scopes: Scopes },
@@ -24,13 +24,13 @@ pub enum Binding {
     /// Built-in `define` binding.
     CoreDefTransformer {
         scopes: Scopes,
-        name: String,
+        name: Symbol,
         transformer: CoreDefTransformer,
     },
     /// Built-in macro-like expression bindings (e.g. if, lambda, quote, set!).
     CoreExprTransformer {
         scopes: Scopes,
-        name: String,
+        name: Symbol,
         transformer: CoreExprTransformer,
     },
 }
@@ -51,9 +51,9 @@ impl Binding {
         match self {
             Binding::Import { .. } => "import",
             Binding::Module { .. } => "module",
-            Binding::Value { name, .. } => name,
+            Binding::Value { name, .. } => name.resolve(),
             Binding::CoreDefTransformer { name, .. }
-            | Binding::CoreExprTransformer { name, .. } => name,
+            | Binding::CoreExprTransformer { name, .. } => name.resolve(),
         }
     }
 
