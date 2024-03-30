@@ -2,7 +2,7 @@ use crate::arena::{Arena, Id};
 use std::{cell::RefCell, collections::HashMap, fmt};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Symbol(Id<String>);
+pub struct Symbol(Id<Box<str>>);
 
 impl Symbol {
     pub fn intern(value: impl AsRef<str>) -> Self {
@@ -20,7 +20,7 @@ impl Symbol {
         })
     }
 
-    fn intern_raw(value: impl Into<String>) -> Self {
+    fn intern_raw(value: impl Into<Box<str>>) -> Self {
         let value = value.into();
         Self::with_mut(|arena| Symbol(arena.intern(value)))
     }
@@ -30,15 +30,15 @@ impl Symbol {
         // the stored data of the Strings remain in place. The arena also remains in memory until
         // the end of the program.
         Self::with(|arena| unsafe {
-            std::mem::transmute::<&str, &'static str>(arena.get(self.0).as_str())
+            std::mem::transmute::<&str, &'static str>(arena.get(self.0).as_ref())
         })
     }
 
-    fn with_mut<T>(f: impl FnOnce(&mut Arena<String>) -> T) -> T {
+    fn with_mut<T>(f: impl FnOnce(&mut Arena<Box<str>>) -> T) -> T {
         ARENA.with(|arena| f(&mut arena.borrow_mut()))
     }
 
-    fn with<T>(f: impl Fn(&Arena<String>) -> T) -> T {
+    fn with<T>(f: impl Fn(&Arena<Box<str>>) -> T) -> T {
         ARENA.with(|arena| f(&arena.borrow_mut()))
     }
 }
@@ -73,6 +73,6 @@ struct Symbols {
 }
 
 thread_local! {
-    static ARENA: RefCell<Arena<String>> = RefCell::default();
+    static ARENA: RefCell<Arena<Box<str>>> = RefCell::default();
     static SYMBOLS: RefCell<Symbols> = RefCell::default();
 }
