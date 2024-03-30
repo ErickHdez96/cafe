@@ -5,8 +5,7 @@ use crate::{
     env::Env,
     symbol::Symbol,
     syntax::{ast, parser},
-    ty::{BuiltinTys, Ty, TyCo},
-    utils::Resolve,
+    ty::{BuiltinTys, TyCo, TyK},
 };
 
 type TyCoEnv<'tyc> = Env<'tyc, Symbol, TyCo>;
@@ -35,7 +34,7 @@ pub fn typecheck_module(
 }
 
 impl TypeChecker<'_> {
-    fn mod_(&mut self, mod_: &mut ast::Module) -> Env<'static, Symbol, Rc<Ty>> {
+    fn mod_(&mut self, mod_: &mut ast::Module) -> Env<'static, Symbol, Rc<TyK>> {
         let mut tys = Env::default();
 
         let ast::ExprKind::Body(body) = &mut mod_.body.kind else {
@@ -71,7 +70,7 @@ impl TypeChecker<'_> {
             .collect::<Env<'_, _, _>>()
     }
 
-    fn expr(&mut self, expr: &mut ast::Expr, tyenv: &mut TyCoEnv) -> Rc<Ty> {
+    fn expr(&mut self, expr: &mut ast::Expr, tyenv: &mut TyCoEnv) -> Rc<TyK> {
         let ty = match &mut expr.kind {
             ast::ExprKind::Body(body) => {
                 let mut tyenv = tyenv.enter();
@@ -163,7 +162,7 @@ impl TypeChecker<'_> {
         rest: Option<&ast::Ident>,
         expr: &mut ast::Expr,
         tyenv: &mut TyCoEnv,
-    ) -> Rc<Ty> {
+    ) -> Rc<TyK> {
         let mut tyenv = tyenv.enter();
         for f in formals {
             if !tyenv.has_immediate(&f.value) {
@@ -174,7 +173,7 @@ impl TypeChecker<'_> {
             tyenv.insert(r.value, TyCo::from_ty(&self.builtins.object));
         }
         let ty = self.expr(expr, &mut tyenv);
-        Rc::new(Ty::Lambda {
+        Rc::new(TyK::Lambda {
             params: formals
                 .iter()
                 .map(|f| tyenv.get(&f.value).cloned().unwrap().into())

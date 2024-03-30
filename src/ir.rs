@@ -1,6 +1,6 @@
 use std::{fmt, rc::Rc};
 
-use crate::{span::Span, syntax::ast::Path, ty::Ty};
+use crate::{span::Span, syntax::ast::Path, ty::TyK};
 
 const INDENTAION_WIDTH: usize = 2;
 
@@ -121,7 +121,7 @@ impl fmt::Debug for Body {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalDecl {
     pub span: Span,
-    pub ty: Rc<Ty>,
+    pub ty: Rc<TyK>,
     pub stack_offset: u32,
     pub size: u32,
 }

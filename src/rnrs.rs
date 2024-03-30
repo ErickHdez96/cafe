@@ -5,7 +5,7 @@ use crate::{
     expander::{self, binding::Binding, scopes::Scopes},
     span::Span,
     syntax::ast,
-    ty::Ty,
+    ty::TyK,
 };
 
 pub fn core_expander_interface() -> ast::ModuleInterface {
@@ -56,7 +56,7 @@ pub fn core_expander_interface() -> ast::ModuleInterface {
 
 pub fn intrinsics_interface() -> ast::ModuleInterface {
     let mid = ast::ModuleName::from_strings(vec!["rnrs", "intrinsics"]);
-    let object = Rc::new(Ty::SObject);
+    let object = Rc::new(TyK::SObject);
 
     ast::ModuleInterface {
         id: mid,

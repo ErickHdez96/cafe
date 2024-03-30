@@ -89,7 +89,7 @@ pub struct Expander<'i> {
     module_stack: Vec<(ast::ModId, Vec<ast::ModId>)>,
     import: &'i dyn Fn(ast::ModId) -> Result<Rc<ast::ModuleInterface>, Diagnostic>,
     register: &'i dyn Fn(ast::ModId, ast::Module),
-    none_ty: Rc<ty::Ty>,
+    none_ty: Rc<ty::TyK>,
 }
 
 impl fmt::Debug for Expander<'_> {
@@ -433,7 +433,7 @@ impl Iterator for Source {
 mod tests {
     use expect_test::{expect, Expect};
 
-    use crate::{test::test_expand_str, utils::Resolve};
+    use crate::test::test_expand_str;
 
     use super::*;
 

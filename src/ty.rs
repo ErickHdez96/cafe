@@ -5,7 +5,7 @@ use crate::{new_id, utils::Id};
 new_id!(pub struct GenericId(usize));
 
 #[derive(Clone, Default, PartialEq, Eq, Hash)]
-pub enum Ty {
+pub enum TyK {
     #[default]
     None,
     /// Generic Scheme object.
@@ -18,23 +18,23 @@ pub enum Ty {
     Void,
     Symbol,
     Lambda {
-        params: Vec<Rc<Ty>>,
-        rest: Option<Rc<Ty>>,
-        ret: Rc<Ty>,
+        params: Vec<Rc<TyK>>,
+        rest: Option<Rc<TyK>>,
+        ret: Rc<TyK>,
     },
-    Pair(Rc<Ty>, Rc<Ty>),
+    Pair(Rc<TyK>, Rc<TyK>),
     Generic(GenericId),
     Uninit,
     Error,
 }
 
-impl Ty {
+impl TyK {
     pub fn is_boolean(&self) -> bool {
-        matches!(self, Ty::Boolean)
+        matches!(self, TyK::Boolean)
     }
 }
 
-impl fmt::Debug for Ty {
+impl fmt::Debug for TyK {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if f.alternate() {
             match self {
@@ -104,27 +104,27 @@ impl fmt::Debug for NumberTy {
 
 #[derive(Debug, Clone)]
 pub struct BuiltinTys {
-    pub object: Rc<Ty>,
-    pub boolean: Rc<Ty>,
-    pub char: Rc<Ty>,
-    pub fixnum: Rc<Ty>,
-    pub string: Rc<Ty>,
-    pub null: Rc<Ty>,
-    pub void: Rc<Ty>,
-    pub uninit: Rc<Ty>,
+    pub object: Rc<TyK>,
+    pub boolean: Rc<TyK>,
+    pub char: Rc<TyK>,
+    pub fixnum: Rc<TyK>,
+    pub string: Rc<TyK>,
+    pub null: Rc<TyK>,
+    pub void: Rc<TyK>,
+    pub uninit: Rc<TyK>,
 }
 
 impl Default for BuiltinTys {
     fn default() -> Self {
         Self {
-            object: Rc::new(Ty::SObject),
-            boolean: Rc::new(Ty::Boolean),
-            char: Rc::new(Ty::Char),
-            fixnum: Rc::new(Ty::Number(NumberTy::I64)),
-            string: Rc::new(Ty::String),
-            null: Rc::new(Ty::Null),
-            void: Rc::new(Ty::Void),
-            uninit: Rc::new(Ty::Uninit),
+            object: Rc::new(TyK::SObject),
+            boolean: Rc::new(TyK::Boolean),
+            char: Rc::new(TyK::Char),
+            fixnum: Rc::new(TyK::Number(NumberTy::I64)),
+            string: Rc::new(TyK::String),
+            null: Rc::new(TyK::Null),
+            void: Rc::new(TyK::Void),
+            uninit: Rc::new(TyK::Uninit),
         }
     }
 }
@@ -138,20 +138,20 @@ impl BuiltinTys {
 /// Type Constraint
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TyCo {
-    Ty(Rc<Ty>),
+    Ty(Rc<TyK>),
 }
 
 impl TyCo {
-    pub fn from_ty(ty: &Rc<Ty>) -> Self {
+    pub fn from_ty(ty: &Rc<TyK>) -> Self {
         Self::Ty(Rc::clone(ty))
     }
 
     pub fn new_generic() -> TyCo {
-        Self::Ty(Rc::new(Ty::Generic(GenericId::new())))
+        Self::Ty(Rc::new(TyK::Generic(GenericId::new())))
     }
 }
 
-impl From<TyCo> for Rc<Ty> {
+impl From<TyCo> for Rc<TyK> {
     fn from(value: TyCo) -> Self {
         match value {
             TyCo::Ty(ty) => ty,

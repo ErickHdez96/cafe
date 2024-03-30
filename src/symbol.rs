@@ -26,8 +26,11 @@ impl Symbol {
     }
 
     pub fn resolve(self) -> &'static str {
+        // SAFETY: The arena stores Strings, even if the Strings get moved when the arena grows,
+        // the stored data of the Strings remain in place. The arena also remains in memory until
+        // the end of the program.
         Self::with(|arena| unsafe {
-            std::mem::transmute::<_, &'static _>(arena.get(self.0).as_str())
+            std::mem::transmute::<&str, &'static str>(arena.get(self.0).as_str())
         })
     }
 

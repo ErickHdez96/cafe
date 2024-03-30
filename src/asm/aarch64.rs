@@ -5,7 +5,7 @@ use crate::{align, ir, span::Span, symbol::Symbol, ty, utils::mangle_symbol};
 
 use super::{Inst, Register, TyArch, ISA};
 
-impl TyArch for ty::Ty {
+impl TyArch for ty::TyK {
     fn size(&self) -> usize {
         match self {
             Self::Boolean => 1,

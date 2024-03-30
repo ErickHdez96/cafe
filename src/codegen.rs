@@ -4,7 +4,7 @@ use crate::{
     span::Span,
     symbol::Symbol,
     syntax::ast,
-    utils::{mangle_symbol, Resolve},
+    utils::mangle_symbol,
 };
 
 pub fn codegen(ir: ir::Package) -> Vec<Inst> {

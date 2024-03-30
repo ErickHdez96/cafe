@@ -8,7 +8,6 @@ use crate::{
     symbol::Symbol,
     syntax::{ast, parser},
     ty,
-    utils::Resolve,
 };
 
 type PEnv<'p> = Env<'p, Symbol, Place>;
@@ -442,7 +441,7 @@ impl Lowerer<'_> {
         &mut self,
         local: Option<ir::Local>,
         span: Span,
-        ty: Rc<ty::Ty>,
+        ty: Rc<ty::TyK>,
     ) -> ir::Local {
         local.unwrap_or_else(|| self.body_builder.alloc(span, ty))
     }
@@ -515,7 +514,7 @@ impl BodyBuilder {
         self.stmts = vec![];
     }
 
-    fn start(&mut self, span: Span, ty: Rc<ty::Ty>) {
+    fn start(&mut self, span: Span, ty: Rc<ty::TyK>) {
         assert_eq!(
             Vec::<ir::LocalDecl>::new(),
             self.locals,
@@ -571,7 +570,7 @@ impl BodyBuilder {
         &mut self.locals[TryInto::<usize>::try_into(local.value()).unwrap()]
     }
 
-    fn alloc(&mut self, span: Span, ty: Rc<ty::Ty>) -> ir::Local {
+    fn alloc(&mut self, span: Span, ty: Rc<ty::TyK>) -> ir::Local {
         let l = ir::Local::new(self.locals.len().try_into().expect("too many locals"));
         self.locals.push(ir::LocalDecl {
             span,

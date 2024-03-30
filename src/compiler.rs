@@ -19,7 +19,6 @@ use crate::{
     },
     ty::BuiltinTys,
     tyc::typecheck_module,
-    utils::Resolve,
 };
 
 pub type Res<T> = Result<T, Diagnostic>;
@@ -27,7 +26,7 @@ pub type Res<T> = Result<T, Diagnostic>;
 #[derive(Debug)]
 pub struct Compiler {
     pub config: CompilerConfig,
-    store: RefCell<Store>,
+    store: RefCell<CompilerStore>,
     env: Env<'static, Symbol, Binding>,
     diagnostics: RefCell<Vec<Diagnostic>>,
 }
@@ -299,7 +298,7 @@ impl Compiler {
 }
 
 #[derive(Debug, Default)]
-struct Store {
+struct CompilerStore {
     filemap: HashMap<FileId, Rc<SourceFile>>,
     module_file: HashMap<ModId, FileId>,
     modules: HashMap<ModId, Rc<Module>>,
@@ -307,7 +306,7 @@ struct Store {
     builtin_tys: BuiltinTys,
 }
 
-impl Store {
+impl CompilerStore {
     fn get_file(&self, fid: FileId) -> Option<Rc<SourceFile>> {
         self.filemap.get(&fid).map(Rc::clone)
     }

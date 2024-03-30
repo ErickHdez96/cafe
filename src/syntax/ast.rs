@@ -1,20 +1,14 @@
 use std::{fmt, rc::Rc};
 
-use crate::{
-    env::Env,
-    expander::binding::Binding,
-    new_id,
-    span::Span,
-    symbol::Symbol,
-    ty::Ty,
-    utils::{Intern, Resolve},
-};
+use crate::{env::Env, expander::binding::Binding, span::Span, symbol::Symbol, ty::TyK};
+
+pub use self::mod_id::ModId;
 
 use super::parser::Number;
 
-const INDENTATION_WIDTH: usize = 2;
+mod mod_id;
 
-new_id!(pub struct ModId(u32), ModuleName, modules);
+const INDENTATION_WIDTH: usize = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Module {
@@ -25,7 +19,7 @@ pub struct Module {
     pub exports: Env<'static, Symbol, Binding>,
     /// All the root bindings (e.g. macro, value) of the module.
     pub bindings: Env<'static, Symbol, Binding>,
-    pub types: Option<Env<'static, Symbol, Rc<Ty>>>,
+    pub types: Option<Env<'static, Symbol, Rc<TyK>>>,
     pub body: Expr,
 }
 
@@ -51,7 +45,7 @@ pub struct ModuleInterface {
     // TODO: bring Binding here
     /// Exported bindings.
     pub bindings: Env<'static, Symbol, Binding>,
-    pub types: Option<Env<'static, Symbol, Rc<Ty>>>,
+    pub types: Option<Env<'static, Symbol, Rc<TyK>>>,
     pub dependencies: Vec<ModId>,
 }
 
@@ -64,6 +58,10 @@ pub struct ModuleName {
 }
 
 impl ModuleName {
+    pub fn intern(self) -> ModId {
+        ModId::intern(self)
+    }
+
     /// Returns a special [`ModuleName`] identifying the root of the module tree when compiling a
     /// project.
     pub fn script() -> ModId {
@@ -282,7 +280,7 @@ impl fmt::Debug for Define {
 pub struct Expr {
     pub span: Span,
     pub kind: ExprKind,
-    pub ty: Rc<Ty>,
+    pub ty: Rc<TyK>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

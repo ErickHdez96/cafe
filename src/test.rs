@@ -20,7 +20,6 @@ use crate::{
     },
     ty::{self, BuiltinTys},
     tyc::typecheck_module,
-    utils::Resolve,
 };
 
 pub fn rnrs_env() -> Env<'static, Symbol, Binding> {

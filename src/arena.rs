@@ -9,6 +9,7 @@ pub struct Id<T> {
 
 impl<T: Clone> Copy for Id<T> {}
 
+#[derive(Debug)]
 pub struct Arena<T> {
     id: u32,
     items: Vec<T>,
