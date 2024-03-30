@@ -255,7 +255,7 @@ mod tests {
         check(
             r"(import (rnrs expander core))
               (define a 1)",
-            expect!["a: fixnum"],
+            expect!["a: i64"],
         );
     }
 

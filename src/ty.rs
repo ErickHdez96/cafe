@@ -91,19 +91,13 @@ impl fmt::Debug for Ty {
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum NumberTy {
-    Fixnum,
+    I64,
 }
 
 impl fmt::Debug for NumberTy {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if f.alternate() {
-            match self {
-                Self::Fixnum => write!(f, "fixnum"),
-            }
-        } else {
-            match self {
-                Self::Fixnum => write!(f, "Fixnum"),
-            }
+        match self {
+            Self::I64 => write!(f, "i64"),
         }
     }
 }
@@ -126,7 +120,7 @@ impl Default for BuiltinTys {
             object: Rc::new(Ty::SObject),
             boolean: Rc::new(Ty::Boolean),
             char: Rc::new(Ty::Char),
-            fixnum: Rc::new(Ty::Number(NumberTy::Fixnum)),
+            fixnum: Rc::new(Ty::Number(NumberTy::I64)),
             string: Rc::new(Ty::String),
             null: Rc::new(Ty::Null),
             void: Rc::new(Ty::Void),

@@ -1,4 +1,6 @@
+pub mod asm;
 pub mod atty;
+pub mod codegen;
 pub mod compiler;
 pub mod config;
 pub mod diagnostics;
@@ -16,3 +18,7 @@ mod test;
 pub mod ty;
 pub mod tyc;
 mod utils;
+
+pub const fn align(n: usize, a: usize) -> usize {
+    (n + (a - 1)) & !(a - 1)
+}

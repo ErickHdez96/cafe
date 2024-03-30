@@ -1,6 +1,8 @@
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use crate::{
+    asm,
+    codegen::codegen,
     diagnostics::Diagnostic,
     env::Env,
     expander::{
@@ -113,6 +115,10 @@ pub fn test_lower_str(input: &str) -> ir::Package {
             unreachable!();
         }
     }
+}
+
+pub fn test_codegen_str(input: &str) -> Vec<asm::Inst> {
+    codegen(test_lower_str(input))
 }
 
 pub struct Libs {
