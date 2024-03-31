@@ -22,15 +22,11 @@ use crate::{
     tyc::typecheck_module,
 };
 
-pub fn rnrs_env(interner: &Interner) -> Env<'static, Symbol, Binding> {
+pub fn rnrs_env(interner: &mut Interner) -> Env<'static, Symbol, Binding> {
     let mut env = intrinsics_env().enter_consume();
     env.set_bindings(core_expander_interface().bindings.into_bindings());
     env = env.enter_consume();
-    env.set_bindings(
-        intrinsics_interface(&interner.builtins.types)
-            .bindings
-            .into_bindings(),
-    );
+    env.set_bindings(intrinsics_interface(interner).bindings.into_bindings());
     env
 }
 
@@ -144,8 +140,8 @@ pub struct Libs {
 }
 
 impl Libs {
-    pub fn new(interner: &Interner) -> Self {
-        let intrinsics = intrinsics_interface(&interner.builtins.types);
+    pub fn new(interner: &mut Interner) -> Self {
+        let intrinsics = intrinsics_interface(interner);
         let intrinsics_mid = intrinsics.id;
         let intrinsics = Rc::new(ast::Module {
             id: intrinsics_mid,

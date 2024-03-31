@@ -228,7 +228,7 @@ mod tests {
 
     fn check(input: &str, expected: Expect) {
         let mut interner = Interner::default();
-        let libs = Libs::new(&interner);
+        let libs = Libs::new(&mut interner);
         let module = test_expand_str_with_libs(input, &libs, &mut interner).module;
         let mid = module.id;
         libs.define(mid, module);

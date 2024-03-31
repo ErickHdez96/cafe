@@ -40,15 +40,17 @@ impl Default for Compiler {
 
 impl Compiler {
     pub fn new() -> Self {
+        let mut interner = Interner::default();
+        let intrinsics = intrinsics_interface(&mut interner);
         let s = Self {
             config: CompilerConfig::default(),
             store: RefCell::default(),
-            interner: Interner::default(),
+            interner,
             env: intrinsics_env(),
             diagnostics: RefCell::default(),
         };
         s.feed_module(core_expander_interface());
-        s.feed_module(intrinsics_interface(&s.interner.builtins.types));
+        s.feed_module(intrinsics);
         s
     }
 

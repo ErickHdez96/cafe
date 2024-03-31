@@ -41,6 +41,7 @@ pub enum TyK {
     },
     Pair(Ty, Ty),
     Generic(usize),
+    Array(Ty),
     Uninit,
     Error,
 }
@@ -127,6 +128,7 @@ impl fmt::Debug for TyArena<'_> {
                     cdr.with_arena(self.arena)
                 ),
                 TyK::Generic(id) => write!(f, "'{id}"),
+                TyK::Array(ty) => write!(f, "(array {:#?})", ty.with_arena(self.arena)),
                 TyK::Uninit => write!(f, "uninit"),
                 TyK::Error => write!(f, "error"),
             }
@@ -152,6 +154,7 @@ impl fmt::Debug for TyArena<'_> {
                     cdr.with_arena(self.arena)
                 ),
                 TyK::Generic(id) => write!(f, "Generic({id})"),
+                TyK::Array(ty) => write!(f, "Array({:?})", ty.with_arena(self.arena)),
                 TyK::Uninit => write!(f, "Uninit"),
                 TyK::Error => write!(f, "Error"),
             }
