@@ -124,7 +124,7 @@ pub fn test_lower_str(input: &str, interner: &mut Interner) -> ir::Package {
         &module,
         intrinsics_mid,
         &|mid| libs.import_mod(mid),
-        &interner.builtins.types,
+        &interner,
     ) {
         Ok(p) => p,
         Err(d) => {

@@ -106,13 +106,13 @@ impl fmt::Debug for BodyDisplay<'_> {
                             .take(body.param_count)
                             .map(|(i, l)| format!(
                                 "[_{i}: {:#?}]",
-                                l.ty.display(&self.interner.types)
+                                l.ty.with_arena(&self.interner.types)
                             ))
                             .collect::<Vec<_>>()
                             .join(" ")
                     )
                 },
-                body.locals[0].ty.display(&self.interner.types),
+                body.locals[0].ty.with_arena(&self.interner.types),
                 body.span,
             )?;
             write!(f, "{}(let (", " ".repeat(width + INDENTAION_WIDTH))?;
@@ -129,7 +129,7 @@ impl fmt::Debug for BodyDisplay<'_> {
                         String::new()
                     },
                     Local::new(i as u32),
-                    ld.ty.display(&self.interner.types),
+                    ld.ty.with_arena(&self.interner.types),
                     ld.span,
                     if i == body.locals.len() - 1 { ")" } else { "" },
                 )?;

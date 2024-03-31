@@ -1,31 +1,25 @@
 use std::fmt;
 
-use crate::{
-    arena::{self, Arena},
-    new_id,
-    utils::Id,
-};
+use crate::arena::{Arena, Id};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Ty(arena::Id<TyK>);
+pub struct Ty(Id<TyK>);
 
 impl Ty {
-    pub const fn value(self) -> arena::Id<TyK> {
+    pub const fn value(self) -> Id<TyK> {
         self.0
     }
 
-    pub fn display(self, arena: &Arena<TyK>) -> TyDisplay {
-        TyDisplay { ty: self, arena }
+    pub fn with_arena(self, arena: &Arena<TyK>) -> TyArena {
+        TyArena { ty: self, arena }
     }
 }
 
-impl From<arena::Id<TyK>> for Ty {
-    fn from(value: arena::Id<TyK>) -> Self {
+impl From<Id<TyK>> for Ty {
+    fn from(value: Id<TyK>) -> Self {
         Self(value)
     }
 }
-
-new_id!(pub struct GenericId(usize));
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub enum TyK {
@@ -46,15 +40,9 @@ pub enum TyK {
         ret: Ty,
     },
     Pair(Ty, Ty),
-    Generic(GenericId),
+    Generic(usize),
     Uninit,
     Error,
-}
-
-impl TyK {
-    pub fn is_boolean(&self) -> bool {
-        matches!(self, TyK::Boolean)
-    }
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -81,8 +69,8 @@ impl TyCo {
         Self::Ty(ty)
     }
 
-    pub fn new_generic(arena: &mut Arena<TyK>) -> TyCo {
-        Self::Ty(arena.alloc(TyK::Generic(GenericId::new())).into())
+    pub fn new_generic(id: usize, arena: &mut Arena<TyK>) -> TyCo {
+        Self::Ty(arena.alloc(TyK::Generic(id)).into())
     }
 }
 
@@ -94,12 +82,18 @@ impl From<TyCo> for Ty {
     }
 }
 
-pub struct TyDisplay<'tyc> {
+pub struct TyArena<'tyc> {
     pub ty: Ty,
     pub arena: &'tyc Arena<TyK>,
 }
 
-impl fmt::Debug for TyDisplay<'_> {
+impl TyArena<'_> {
+    pub fn is_boolean(&self) -> bool {
+        matches!(self.arena.get(self.ty.0), TyK::Boolean)
+    }
+}
+
+impl fmt::Debug for TyArena<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if f.alternate() {
             match self.arena.get(self.ty.0) {
@@ -117,20 +111,20 @@ impl fmt::Debug for TyDisplay<'_> {
                     "(-> {}{} {:#?})",
                     params
                         .iter()
-                        .map(|p| format!("{:#?}", p.display(self.arena)))
+                        .map(|p| format!("{:#?}", p.with_arena(self.arena)))
                         .collect::<Vec<_>>()
                         .join(" "),
                     match rest {
-                        Some(r) => format!(" ({:#?} ...)", r.display(self.arena)),
+                        Some(r) => format!(" ({:#?} ...)", r.with_arena(self.arena)),
                         None => String::new(),
                     },
-                    ret.display(self.arena),
+                    ret.with_arena(self.arena),
                 ),
                 TyK::Pair(car, cdr) => write!(
                     f,
                     "pair({:?}, {:?})",
-                    car.display(self.arena),
-                    cdr.display(self.arena)
+                    car.with_arena(self.arena),
+                    cdr.with_arena(self.arena)
                 ),
                 TyK::Generic(id) => write!(f, "'{id}"),
                 TyK::Uninit => write!(f, "uninit"),
@@ -154,8 +148,8 @@ impl fmt::Debug for TyDisplay<'_> {
                 TyK::Pair(car, cdr) => write!(
                     f,
                     "Pair({:?}, {:?})",
-                    car.display(self.arena),
-                    cdr.display(self.arena)
+                    car.with_arena(self.arena),
+                    cdr.with_arena(self.arena)
                 ),
                 TyK::Generic(id) => write!(f, "Generic({id})"),
                 TyK::Uninit => write!(f, "Uninit"),

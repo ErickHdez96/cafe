@@ -3,7 +3,7 @@ use std::rc::Rc;
 use crate::{
     diagnostics::Diagnostic,
     env::Env,
-    interner::BuiltinTys,
+    interner::Interner,
     ir,
     span::Span,
     symbol::Symbol,
@@ -36,12 +36,12 @@ pub fn lower_ast(
     // TODO: Improve this
     intrinsics_mid: ast::ModId,
     import: &dyn Fn(ast::ModId) -> Result<Rc<ast::Module>, Diagnostic>,
-    builtin_tys: &BuiltinTys,
+    interner: &Interner,
 ) -> Result<ir::Package, Vec<Diagnostic>> {
     let mut lowerer = Lowerer {
         import,
         intrinsics_mid,
-        builtin_tys,
+        interner,
         diagnostics: vec![],
         current_module: mod_.id,
         current_path: vec![],
@@ -65,8 +65,7 @@ pub fn lower_ast(
 struct Lowerer<'i> {
     import: &'i dyn Fn(ast::ModId) -> Result<Rc<ast::Module>, Diagnostic>,
     intrinsics_mid: ast::ModId,
-
-    builtin_tys: &'i BuiltinTys,
+    interner: &'i Interner,
     diagnostics: Vec<Diagnostic>,
     current_module: ast::ModId,
     current_path: Vec<Symbol>,
@@ -132,7 +131,8 @@ impl Lowerer<'_> {
         };
         let init = "@init".into();
 
-        self.body_builder.start(mod_.span, self.builtin_tys.void);
+        self.body_builder
+            .start(mod_.span, self.interner.builtins.types.void);
 
         let env = self.lower_mod_body(body);
 
@@ -224,15 +224,20 @@ impl Lowerer<'_> {
     ) -> ast::Path {
         self.enter_body();
         let mut env = env.enter();
-        self.body_builder.start(span, self.builtin_tys.object);
+        self.body_builder
+            .start(span, self.interner.builtins.types.object);
 
         for f in formals {
-            let local = self.body_builder.alloc(f.span, self.builtin_tys.object);
+            let local = self
+                .body_builder
+                .alloc(f.span, self.interner.builtins.types.object);
             env.insert(f.value, local.into());
         }
 
         if let Some(rest) = rest {
-            let local = self.body_builder.alloc(rest.span, self.builtin_tys.object);
+            let local = self
+                .body_builder
+                .alloc(rest.span, self.interner.builtins.types.object);
             env.insert(rest.value, local.into());
         }
 
@@ -297,7 +302,7 @@ impl Lowerer<'_> {
                 let l = self.get_or_alloc_local(
                     local,
                     expr.span,
-                    expr.ty.unwrap_or(self.builtin_tys.none),
+                    expr.ty.unwrap_or(self.interner.builtins.types.none),
                 );
                 self.body_builder.load_i(
                     l,
@@ -310,7 +315,7 @@ impl Lowerer<'_> {
                 let l = self.get_or_alloc_local(
                     local,
                     expr.span,
-                    expr.ty.unwrap_or(self.builtin_tys.none),
+                    expr.ty.unwrap_or(self.interner.builtins.types.none),
                 );
                 self.body_builder
                     .load_i(l, ir::Constant::new(*c as u64, expr.span), expr.span);
@@ -320,7 +325,7 @@ impl Lowerer<'_> {
                 let l = self.get_or_alloc_local(
                     local,
                     expr.span,
-                    expr.ty.unwrap_or(self.builtin_tys.none),
+                    expr.ty.unwrap_or(self.interner.builtins.types.none),
                 );
                 match n {
                     parser::Number::Fixnum(fx) => {
@@ -341,7 +346,7 @@ impl Lowerer<'_> {
                 let l = self.get_or_alloc_local(
                     local,
                     expr.span,
-                    expr.ty.unwrap_or(self.builtin_tys.none),
+                    expr.ty.unwrap_or(self.interner.builtins.types.none),
                 );
 
                 match place {
@@ -370,13 +375,20 @@ impl Lowerer<'_> {
         local: Option<ir::Local>,
         env: &PEnv,
     ) -> ir::Local {
-        let retl = self.get_or_alloc_local(local, span, self.builtin_tys.object);
+        let retl = self.get_or_alloc_local(local, span, self.interner.builtins.types.object);
         let cl = self.lower_expr(cond, None, env);
-        let cond_local = if self.body_builder.get_local(cl).ty == self.builtin_tys.boolean {
+        let cond_local = if self
+            .body_builder
+            .get_local(cl)
+            .ty
+            .with_arena(&self.interner.types)
+            .is_boolean()
+        {
             cl
         } else {
             self.body_builder.arg(cl, cond.span);
-            let cond_local = self.get_or_alloc_local(None, span, self.builtin_tys.boolean);
+            let cond_local =
+                self.get_or_alloc_local(None, span, self.interner.builtins.types.boolean);
             self.body_builder.call_label(
                 cond_local,
                 ast::Path {
@@ -429,7 +441,7 @@ impl Lowerer<'_> {
         local: Option<ir::Local>,
         env: &PEnv,
     ) -> ir::Local {
-        let l = self.get_or_alloc_local(local, span, self.builtin_tys.object);
+        let l = self.get_or_alloc_local(local, span, self.interner.builtins.types.object);
         let mut elems = list.iter();
 
         let func = {
@@ -769,7 +781,7 @@ mod tests {
                       (fn (|{|@init| (#script ()) 0:0..51}|) void (0:0..51)
                         (let ([_0 void (0:0..51)]
                               [_1 object (0:44..7)]
-                              [_2 (-> object object) (0:45..2)]
+                              [_2 (-> '0 '0) (0:45..2)]
                               [_3 boolean (0:48..2)])
                           (bb 0
                             (addressof _2 |{|id| (#script ()) 0:8..2}| (0:45..2))
@@ -804,7 +816,7 @@ mod tests {
                       (fn (|{|@init| (#script ()) 0:0..178}|) void (0:0..178)
                         (let ([_0 void (0:0..178)]
                               [_1 object (0:171..7)]
-                              [_2 (-> object object) (0:172..2)]
+                              [_2 (-> '0 '0) (0:172..2)]
                               [_3 boolean (0:175..2)])
                           (bb 0
                             (addressof _2 |{|id| (id ()) 0:100..2}| (0:172..2))

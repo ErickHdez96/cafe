@@ -18,6 +18,7 @@ struct TypeChecker<'tyc> {
     builtins: &'tyc BuiltinTys,
     diagnostics: Vec<Diagnostic>,
     get_mod_interface: &'tyc dyn Fn(ast::ModId) -> Rc<ast::ModuleInterface>,
+    generic_id: usize,
 }
 
 pub fn typecheck_module(
@@ -32,6 +33,7 @@ pub fn typecheck_module(
         builtins,
         diagnostics: vec![],
         get_mod_interface: &get_mod_interface,
+        generic_id: 0,
     };
     let tys = tc.mod_(module);
     module.types = Some(tys);
@@ -72,7 +74,7 @@ impl TypeChecker<'_> {
         tys.into_bindings()
             .into_iter()
             .map(|(k, ty)| (k, ty.into()))
-            .collect::<Env<'_, _, _>>()
+            .collect()
     }
 
     fn expr(&mut self, expr: &mut ast::Expr, tyenv: &mut TyCoEnv) -> Ty {
@@ -171,7 +173,7 @@ impl TypeChecker<'_> {
         let mut tyenv = tyenv.enter();
         for f in formals {
             if !tyenv.has_immediate(&f.value) {
-                tyenv.insert(f.value, TyCo::Ty(self.builtins.object));
+                tyenv.insert(f.value, TyCo::Ty(self.new_generic()));
             }
         }
         if let Some(r) = rest {
@@ -207,6 +209,12 @@ impl TypeChecker<'_> {
             }
         }
     }
+
+    fn new_generic(&mut self) -> Ty {
+        let id = self.generic_id;
+        self.generic_id += self.generic_id;
+        self.arena.alloc(TyK::Generic(id)).into()
+    }
 }
 
 #[cfg(test)]
@@ -234,7 +242,7 @@ mod tests {
         for (i, (name, ty)) in module.types.as_ref().unwrap().iter().enumerate() {
             out.push_str(&format!(
                 "{name}: {:#?}{}",
-                ty.display(&interner.types),
+                ty.with_arena(&interner.types),
                 if i + 1 < len { "\n" } else { "" },
             ));
         }
@@ -274,7 +282,7 @@ mod tests {
         check(
             r"(import (rnrs expander core))
               (define a (lambda (x) x))",
-            expect!["a: (-> object object)"],
+            expect!["a: (-> '0 '0)"],
         );
     }
 }
