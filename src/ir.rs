@@ -1,6 +1,6 @@
-use std::{fmt, rc::Rc};
+use std::fmt;
 
-use crate::{span::Span, syntax::ast::Path, ty::TyK};
+use crate::{interner::Interner, span::Span, syntax::ast::Path, ty::Ty};
 
 const INDENTAION_WIDTH: usize = 2;
 
@@ -9,25 +9,51 @@ pub struct Package {
     pub bodies: Vec<Body>,
 }
 
-impl fmt::Debug for Package {
+impl Package {
+    pub fn display<'a>(&'a self, interner: &'a Interner) -> PackageDisplay<'a> {
+        PackageDisplay {
+            package: self,
+            interner,
+        }
+    }
+}
+
+pub struct PackageDisplay<'a> {
+    pub package: &'a Package,
+    pub interner: &'a Interner,
+}
+
+impl fmt::Debug for PackageDisplay<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if f.alternate() {
             let width = f.width().unwrap_or_default();
             let padding = " ".repeat(width);
             writeln!(f, "{}(pkg", padding)?;
-            for (i, body) in self.bodies.iter().enumerate() {
+            for (i, body) in self.package.bodies.iter().enumerate() {
                 write!(
                     f,
                     "{:#width$?}{}",
-                    body,
-                    if i < self.bodies.len() - 1 { "\n" } else { "" },
+                    body.display(self.interner),
+                    if i < self.package.bodies.len() - 1 {
+                        "\n"
+                    } else {
+                        ""
+                    },
                     width = width + INDENTAION_WIDTH
                 )?;
             }
             write!(f, ")")
         } else {
             f.debug_struct("Package")
-                .field("bodies", &self.bodies)
+                .field(
+                    "bodies",
+                    &self
+                        .package
+                        .bodies
+                        .iter()
+                        .map(|b| b.display(self.interner))
+                        .collect::<Vec<_>>(),
+                )
                 .finish()
         }
     }
@@ -44,35 +70,53 @@ pub struct Body {
     pub basic_blocks: Vec<BasicBlockData>,
 }
 
-impl fmt::Debug for Body {
+impl Body {
+    pub fn display<'a>(&'a self, interner: &'a Interner) -> BodyDisplay<'a> {
+        BodyDisplay {
+            body: self,
+            interner,
+        }
+    }
+}
+
+pub struct BodyDisplay<'a> {
+    pub body: &'a Body,
+    pub interner: &'a Interner,
+}
+
+impl fmt::Debug for BodyDisplay<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let body = self.body;
         if f.alternate() {
             let width = f.width().unwrap_or_default();
             let padding = " ".repeat(width);
             writeln!(
                 f,
                 "{padding}(fn (|{:#?}|{}) {:#?} ({})",
-                self.name,
-                if self.param_count == 0 {
+                body.name,
+                if body.param_count == 0 {
                     String::new()
                 } else {
                     format!(
                         " {}",
-                        self.locals
+                        body.locals
                             .iter()
                             .enumerate()
                             .skip(1)
-                            .take(self.param_count)
-                            .map(|(i, l)| format!("[_{i}: {:#?}]", l.ty))
+                            .take(body.param_count)
+                            .map(|(i, l)| format!(
+                                "[_{i}: {:#?}]",
+                                l.ty.display(&self.interner.types)
+                            ))
                             .collect::<Vec<_>>()
                             .join(" ")
                     )
                 },
-                self.locals[0].ty,
-                self.span,
+                body.locals[0].ty.display(&self.interner.types),
+                body.span,
             )?;
             write!(f, "{}(let (", " ".repeat(width + INDENTAION_WIDTH))?;
-            for (i, ld) in self.locals.iter().enumerate() {
+            for (i, ld) in body.locals.iter().enumerate() {
                 write!(
                     f,
                     "{}[{} {:#?} ({})]{}",
@@ -85,18 +129,18 @@ impl fmt::Debug for Body {
                         String::new()
                     },
                     Local::new(i as u32),
-                    ld.ty,
+                    ld.ty.display(&self.interner.types),
                     ld.span,
-                    if i == self.locals.len() - 1 { ")" } else { "" },
+                    if i == body.locals.len() - 1 { ")" } else { "" },
                 )?;
             }
             writeln!(f)?;
-            for (i, bb) in self.basic_blocks.iter().enumerate() {
+            for (i, bb) in body.basic_blocks.iter().enumerate() {
                 write!(
                     f,
                     "{:#width$?}{}",
                     bb,
-                    if i < self.basic_blocks.len() - 1 {
+                    if i < body.basic_blocks.len() - 1 {
                         "\n"
                     } else {
                         ""
@@ -107,12 +151,12 @@ impl fmt::Debug for Body {
             write!(f, "))")
         } else {
             f.debug_struct("Body")
-                .field("name", &self.name)
-                .field("span", &self.span)
-                .field("stack_size", &self.stack_size)
-                .field("locals", &self.locals)
-                .field("basic_blocks", &self.basic_blocks)
-                .field("param_count", &self.param_count)
+                .field("name", &body.name)
+                .field("span", &body.span)
+                .field("stack_size", &body.stack_size)
+                .field("locals", &body.locals)
+                .field("basic_blocks", &body.basic_blocks)
+                .field("param_count", &body.param_count)
                 .finish()
         }
     }
@@ -121,7 +165,7 @@ impl fmt::Debug for Body {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalDecl {
     pub span: Span,
-    pub ty: Rc<TyK>,
+    pub ty: Ty,
     pub stack_offset: u32,
     pub size: u32,
 }

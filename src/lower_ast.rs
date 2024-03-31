@@ -3,11 +3,12 @@ use std::rc::Rc;
 use crate::{
     diagnostics::Diagnostic,
     env::Env,
+    interner::BuiltinTys,
     ir,
     span::Span,
     symbol::Symbol,
     syntax::{ast, parser},
-    ty,
+    ty::Ty,
 };
 
 type PEnv<'p> = Env<'p, Symbol, Place>;
@@ -35,7 +36,7 @@ pub fn lower_ast(
     // TODO: Improve this
     intrinsics_mid: ast::ModId,
     import: &dyn Fn(ast::ModId) -> Result<Rc<ast::Module>, Diagnostic>,
-    builtin_tys: ty::BuiltinTys,
+    builtin_tys: &BuiltinTys,
 ) -> Result<ir::Package, Vec<Diagnostic>> {
     let mut lowerer = Lowerer {
         import,
@@ -65,7 +66,7 @@ struct Lowerer<'i> {
     import: &'i dyn Fn(ast::ModId) -> Result<Rc<ast::Module>, Diagnostic>,
     intrinsics_mid: ast::ModId,
 
-    builtin_tys: ty::BuiltinTys,
+    builtin_tys: &'i BuiltinTys,
     diagnostics: Vec<Diagnostic>,
     current_module: ast::ModId,
     current_path: Vec<Symbol>,
@@ -131,8 +132,7 @@ impl Lowerer<'_> {
         };
         let init = "@init".into();
 
-        self.body_builder
-            .start(mod_.span, Rc::clone(&self.builtin_tys.void));
+        self.body_builder.start(mod_.span, self.builtin_tys.void);
 
         let env = self.lower_mod_body(body);
 
@@ -224,20 +224,15 @@ impl Lowerer<'_> {
     ) -> ast::Path {
         self.enter_body();
         let mut env = env.enter();
-        self.body_builder
-            .start(span, Rc::clone(&self.builtin_tys.object));
+        self.body_builder.start(span, self.builtin_tys.object);
 
         for f in formals {
-            let local = self
-                .body_builder
-                .alloc(f.span, Rc::clone(&self.builtin_tys.object));
+            let local = self.body_builder.alloc(f.span, self.builtin_tys.object);
             env.insert(f.value, local.into());
         }
 
         if let Some(rest) = rest {
-            let local = self
-                .body_builder
-                .alloc(rest.span, Rc::clone(&self.builtin_tys.object));
+            let local = self.body_builder.alloc(rest.span, self.builtin_tys.object);
             env.insert(rest.value, local.into());
         }
 
@@ -299,7 +294,11 @@ impl Lowerer<'_> {
             ast::ExprKind::List(l) => self.lower_list(l, expr.span, local, env),
             ast::ExprKind::DottedList(_, _) => todo!(),
             ast::ExprKind::Boolean(b) => {
-                let l = self.get_or_alloc_local(local, expr.span, Rc::clone(&expr.ty));
+                let l = self.get_or_alloc_local(
+                    local,
+                    expr.span,
+                    expr.ty.unwrap_or(self.builtin_tys.none),
+                );
                 self.body_builder.load_i(
                     l,
                     ir::Constant::new(if *b { 1 } else { 0 }, expr.span),
@@ -308,13 +307,21 @@ impl Lowerer<'_> {
                 l
             }
             ast::ExprKind::Char(c) => {
-                let l = self.get_or_alloc_local(local, expr.span, Rc::clone(&expr.ty));
+                let l = self.get_or_alloc_local(
+                    local,
+                    expr.span,
+                    expr.ty.unwrap_or(self.builtin_tys.none),
+                );
                 self.body_builder
                     .load_i(l, ir::Constant::new(*c as u64, expr.span), expr.span);
                 l
             }
             ast::ExprKind::Number(n) => {
-                let l = self.get_or_alloc_local(local, expr.span, Rc::clone(&expr.ty));
+                let l = self.get_or_alloc_local(
+                    local,
+                    expr.span,
+                    expr.ty.unwrap_or(self.builtin_tys.none),
+                );
                 match n {
                     parser::Number::Fixnum(fx) => {
                         self.body_builder.load_i(
@@ -331,7 +338,11 @@ impl Lowerer<'_> {
                     panic!("undefined variable {:}", v.value)
                 };
 
-                let l = self.get_or_alloc_local(local, expr.span, Rc::clone(&expr.ty));
+                let l = self.get_or_alloc_local(
+                    local,
+                    expr.span,
+                    expr.ty.unwrap_or(self.builtin_tys.none),
+                );
 
                 match place {
                     Place::Local(loc) => {
@@ -359,14 +370,13 @@ impl Lowerer<'_> {
         local: Option<ir::Local>,
         env: &PEnv,
     ) -> ir::Local {
-        let retl = self.get_or_alloc_local(local, span, Rc::clone(&self.builtin_tys.object));
+        let retl = self.get_or_alloc_local(local, span, self.builtin_tys.object);
         let cl = self.lower_expr(cond, None, env);
-        let cond_local = if self.body_builder.get_local(cl).ty.is_boolean() {
+        let cond_local = if self.body_builder.get_local(cl).ty == self.builtin_tys.boolean {
             cl
         } else {
             self.body_builder.arg(cl, cond.span);
-            let cond_local =
-                self.get_or_alloc_local(None, span, Rc::clone(&self.builtin_tys.boolean));
+            let cond_local = self.get_or_alloc_local(None, span, self.builtin_tys.boolean);
             self.body_builder.call_label(
                 cond_local,
                 ast::Path {
@@ -404,8 +414,8 @@ impl Lowerer<'_> {
         self.body_builder.get_block_mut(tidx).terminator.kind = ir::TerminatorKind::Goto(endidx);
         self.body_builder.get_block_mut(fidx).terminator.kind = ir::TerminatorKind::Goto(endidx);
 
-        let tlty = Rc::clone(&self.body_builder.get_local(tl).ty);
-        if Rc::ptr_eq(&tlty, &self.body_builder.get_local(fl).ty) {
+        let tlty = self.body_builder.get_local(tl).ty;
+        if tlty == self.body_builder.get_local(fl).ty {
             self.body_builder.get_local_mut(retl).ty = tlty;
         }
 
@@ -419,7 +429,7 @@ impl Lowerer<'_> {
         local: Option<ir::Local>,
         env: &PEnv,
     ) -> ir::Local {
-        let l = self.get_or_alloc_local(local, span, Rc::clone(&self.builtin_tys.object));
+        let l = self.get_or_alloc_local(local, span, self.builtin_tys.object);
         let mut elems = list.iter();
 
         let func = {
@@ -437,12 +447,7 @@ impl Lowerer<'_> {
         l
     }
 
-    fn get_or_alloc_local(
-        &mut self,
-        local: Option<ir::Local>,
-        span: Span,
-        ty: Rc<ty::TyK>,
-    ) -> ir::Local {
+    fn get_or_alloc_local(&mut self, local: Option<ir::Local>, span: Span, ty: Ty) -> ir::Local {
         local.unwrap_or_else(|| self.body_builder.alloc(span, ty))
     }
 
@@ -514,7 +519,7 @@ impl BodyBuilder {
         self.stmts = vec![];
     }
 
-    fn start(&mut self, span: Span, ty: Rc<ty::TyK>) {
+    fn start(&mut self, span: Span, ty: Ty) {
         assert_eq!(
             Vec::<ir::LocalDecl>::new(),
             self.locals,
@@ -570,7 +575,7 @@ impl BodyBuilder {
         &mut self.locals[TryInto::<usize>::try_into(local.value()).unwrap()]
     }
 
-    fn alloc(&mut self, span: Span, ty: Rc<ty::TyK>) -> ir::Local {
+    fn alloc(&mut self, span: Span, ty: Ty) -> ir::Local {
         let l = ir::Local::new(self.locals.len().try_into().expect("too many locals"));
         self.locals.push(ir::LocalDecl {
             span,
@@ -628,11 +633,12 @@ impl BodyBuilder {
 mod tests {
     use expect_test::{expect, Expect};
 
-    use crate::test::test_lower_str;
+    use crate::{interner::Interner, test::test_lower_str};
 
     pub fn check(input: &str, expected: Expect) {
-        let res = test_lower_str(input);
-        expected.assert_debug_eq(&res);
+        let mut interner = Interner::default();
+        let res = test_lower_str(input, &mut interner);
+        expected.assert_debug_eq(&res.display(&interner));
     }
 
     #[test]

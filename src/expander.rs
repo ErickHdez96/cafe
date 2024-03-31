@@ -12,7 +12,6 @@ use crate::{
         cst::{Cst, CstKind, ListKind, Prefix},
         parser::{parse_char, parse_number, Number},
     },
-    ty,
 };
 
 use self::{
@@ -75,7 +74,6 @@ pub fn expand_module_with_config(
         module_stack: vec![],
         import: config.import.expect("an import function"),
         register: config.register.expect("a register function"),
-        none_ty: Rc::default(),
     };
     let env = intrinsics_env();
     e.expand_module(module, config.base_env.unwrap_or(&env))
@@ -89,7 +87,6 @@ pub struct Expander<'i> {
     module_stack: Vec<(ast::ModId, Vec<ast::ModId>)>,
     import: &'i dyn Fn(ast::ModId) -> Result<Rc<ast::ModuleInterface>, Diagnostic>,
     register: &'i dyn Fn(ast::ModId, ast::Module),
-    none_ty: Rc<ty::TyK>,
 }
 
 impl fmt::Debug for Expander<'_> {
@@ -167,7 +164,7 @@ impl Expander<'_> {
                 body: ast::Expr {
                     span,
                     kind: ast::ExprKind::Body(items),
-                    ty: Rc::clone(&self.none_ty),
+                    ty: None,
                 },
                 types: None,
             },
@@ -188,14 +185,14 @@ impl Expander<'_> {
             CstKind::True | CstKind::False => ast::Expr {
                 span,
                 kind: ast::ExprKind::Boolean(cst.kind == CstKind::True),
-                ty: Rc::clone(&self.none_ty),
+                ty: None,
             }
             .into(),
             CstKind::Ident(ident) => self.expand_ident(*ident, span, env),
             CstKind::Char(c) => ast::Expr {
                 span,
                 kind: ast::ExprKind::Char(parse_char(c.resolve())),
-                ty: Rc::clone(&self.none_ty),
+                ty: None,
             }
             .into(),
             CstKind::Number(n) => ast::Expr {
@@ -207,7 +204,7 @@ impl Expander<'_> {
                         Number::Fixnum(0)
                     }
                 }),
-                ty: Rc::clone(&self.none_ty),
+                ty: None,
             }
             .into(),
             CstKind::String(_) => todo!(),
@@ -249,7 +246,7 @@ impl Expander<'_> {
                                 })
                                 .collect(),
                         ),
-                        ty: Rc::clone(&self.none_ty),
+                        ty: None,
                     }
                     .into(),
                 },
@@ -263,7 +260,7 @@ impl Expander<'_> {
                             })
                             .collect(),
                     ),
-                    ty: Rc::clone(&self.none_ty),
+                    ty: None,
                 }
                 .into(),
             },
@@ -272,7 +269,7 @@ impl Expander<'_> {
                 ast::Expr {
                     span,
                     kind: ast::ExprKind::List(vec![]),
-                    ty: Rc::clone(&self.none_ty),
+                    ty: None,
                 }
                 .into()
             }
@@ -290,7 +287,7 @@ impl Expander<'_> {
                     module: *orig_module,
                     value: ident,
                 }),
-                ty: Rc::clone(&self.none_ty),
+                ty: None,
             }
             .into(),
             None => {
@@ -302,7 +299,7 @@ impl Expander<'_> {
                         module: self.module,
                         value: ident,
                     }),
-                    ty: Rc::clone(&self.none_ty),
+                    ty: None,
                 }
                 .into()
             }
@@ -433,12 +430,12 @@ impl Iterator for Source {
 mod tests {
     use expect_test::{expect, Expect};
 
-    use crate::test::test_expand_str;
+    use crate::{interner::Interner, test::test_expand_str};
 
     use super::*;
 
     pub fn check(input: &str, expected: Expect) -> ExpanderResultMod {
-        let res = test_expand_str(input);
+        let res = test_expand_str(input, &mut Interner::default());
         expected.assert_debug_eq(&res.module.body);
         res
     }

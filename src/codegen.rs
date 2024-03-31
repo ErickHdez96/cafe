@@ -1,17 +1,19 @@
 use crate::{
+    arena::Arena,
     asm::{Condition, Direction, Inst, Register, ISA},
     ir,
     span::Span,
     symbol::Symbol,
     syntax::ast,
+    ty::TyK,
     utils::mangle_symbol,
 };
 
-pub fn codegen(ir: ir::Package) -> Vec<Inst> {
-    Codegen::new().generate(ir)
+pub fn codegen(ir: ir::Package, types: &Arena<TyK>) -> Vec<Inst> {
+    Codegen::new(types).generate(ir)
 }
 
-struct Codegen {
+struct Codegen<'tyc> {
     output: Vec<Inst>,
     /// The offset, size in the stack where the locals are stored (if at all).
     locals_stack: Vec<(u32, u32)>,
@@ -20,12 +22,13 @@ struct Codegen {
     temp_offset: usize,
     arg_registers: &'static [Register],
     arg_offset: usize,
+    types: &'tyc Arena<TyK>,
 }
 
-impl Codegen {
+impl<'tyc> Codegen<'tyc> {
     const FUNCTION_ALIGNMENT: u8 = 4;
 
-    fn new() -> Self {
+    fn new(types: &'tyc Arena<TyK>) -> Self {
         Self {
             output: vec![],
             locals_stack: vec![],
@@ -33,6 +36,7 @@ impl Codegen {
             temp_offset: 0,
             arg_registers: &Register::PARAM_REGISTERS,
             arg_offset: 0,
+            types,
         }
     }
 
@@ -227,7 +231,7 @@ impl Codegen {
         self.emit(Inst::pseudo_global(label));
         self.emit(Inst::pseudo_label(label));
 
-        ISA::process_body(&mut body);
+        ISA::process_body(&mut body, self.types);
         self.locals_stack = body
             .locals
             .iter()
@@ -483,11 +487,11 @@ pub fn canonicalize_symbol(path: &ast::Path) -> Symbol {
 
 #[cfg(test)]
 mod tests {
-    use crate::{asm::Inst, test::test_codegen_str};
+    use crate::{asm::Inst, interner::Interner, test::test_codegen_str};
     use expect_test::{expect, Expect};
 
     fn check(input: &str, expected: Expect) {
-        let res = test_codegen_str(input);
+        let res = test_codegen_str(input, &mut Interner::default());
         expected.assert_eq(
             &res.into_iter()
                 .map(|Inst { span, value }| {
@@ -500,67 +504,7 @@ mod tests {
                 .collect::<Vec<_>>()
                 .join("\n"),
         );
-        //compiler.config.native.implicit_rnrs_typed_base = false;
-        //let mut pkg = compiler
-        //    .emit_tir(
-        //        input,
-        //        &mut compiler::intrinsics::new_global_env().enter_scope_consume(),
-        //    )
-        //    .expect("couldn't compile input");
-        //assert_eq!(
-        //    compiler.diagnostics.diagnostics,
-        //    vec![],
-        //    "should have compiled without errors"
-        //);
-        //pkg.bodies.retain(|b| !b.name.value.starts_with("rnrs"));
-        //expected.assert_eq(
-        //    &codegen(pkg)
-        //        .into_iter()
-        //        .map(|Inst { span, value }| {
-        //            if span.is_dummy() {
-        //                value
-        //            } else {
-        //                format!("{}; ({}..{})", value, span.lo, span.hi)
-        //            }
-        //        })
-        //        .collect::<Vec<_>>()
-        //        .join("\n"),
-        //);
     }
-
-    //fn check_intrinsics_expander(input: &str, expected: Expect) {
-    //    let mut compiler = Compiler::default();
-    //    compiler.ir_register_rnrs_typed_intrinsics_expander();
-    //    check(
-    //        compiler,
-    //        &format!("(import (rnrs typed intrinsics expander)) {}", input),
-    //        expected,
-    //    );
-    //}
-
-    //fn check_intrinsics(input: &str, expected: Expect) {
-    //    let mut compiler = Compiler::default();
-    //    compiler.ir_register_rnrs_typed_intrinsics();
-    //    check(
-    //        compiler,
-    //        &format!("(import (rnrs typed intrinsics)) {}", input),
-    //        expected,
-    //    );
-    //}
-
-    //fn check_io(input: &str, expected: Expect) {
-    //    let mut compiler = Compiler::default();
-    //    compiler.ir_register_rnrs_typed_intrinsics_expander();
-    //    compiler.ir_register_rnrs_typed_io_simple();
-    //    check(
-    //        compiler,
-    //        &format!(
-    //            "(import (rnrs typed intrinsics expander) (rnrs typed io simple)) {}",
-    //            input
-    //        ),
-    //        expected,
-    //    );
-    //}
 
     mod primitives {
         use super::*;

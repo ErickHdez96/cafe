@@ -1,11 +1,9 @@
-use std::rc::Rc;
-
 use crate::{
     env::Env,
     expander::{self, binding::Binding, scopes::Scopes},
+    interner::BuiltinTys,
     span::Span,
     syntax::ast,
-    ty::TyK,
 };
 
 pub fn core_expander_interface() -> ast::ModuleInterface {
@@ -54,9 +52,8 @@ pub fn core_expander_interface() -> ast::ModuleInterface {
     }
 }
 
-pub fn intrinsics_interface() -> ast::ModuleInterface {
+pub fn intrinsics_interface(builtin_tys: &BuiltinTys) -> ast::ModuleInterface {
     let mid = ast::ModuleName::from_strings(vec!["rnrs", "intrinsics"]);
-    let object = Rc::new(TyK::SObject);
 
     ast::ModuleInterface {
         id: mid,
@@ -152,17 +149,17 @@ pub fn intrinsics_interface() -> ast::ModuleInterface {
             ),
         ]),
         types: Some(Env::from_iter(vec![
-            ("+".into(), Rc::clone(&object)),
-            ("-".into(), Rc::clone(&object)),
-            ("*".into(), Rc::clone(&object)),
-            ("/".into(), Rc::clone(&object)),
-            ("=".into(), Rc::clone(&object)),
-            ("<".into(), Rc::clone(&object)),
-            ("<=".into(), Rc::clone(&object)),
-            (">".into(), Rc::clone(&object)),
-            (">=".into(), Rc::clone(&object)),
-            ("cons".into(), Rc::clone(&object)),
-            ("truthy?".into(), Rc::clone(&object)),
+            ("+".into(), builtin_tys.object),
+            ("-".into(), builtin_tys.object),
+            ("*".into(), builtin_tys.object),
+            ("/".into(), builtin_tys.object),
+            ("=".into(), builtin_tys.object),
+            ("<".into(), builtin_tys.object),
+            ("<=".into(), builtin_tys.object),
+            (">".into(), builtin_tys.object),
+            (">=".into(), builtin_tys.object),
+            ("cons".into(), builtin_tys.object),
+            ("truthy?".into(), builtin_tys.object),
         ])),
         dependencies: vec![],
     }

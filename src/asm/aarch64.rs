@@ -1,7 +1,15 @@
 use core::fmt;
 use std::fmt::Display;
 
-use crate::{align, ir, span::Span, symbol::Symbol, ty, utils::mangle_symbol};
+use crate::{
+    align,
+    arena::Arena,
+    ir,
+    span::Span,
+    symbol::Symbol,
+    ty::{self, TyK},
+    utils::mangle_symbol,
+};
 
 use super::{Inst, Register, TyArch, ISA};
 
@@ -338,15 +346,16 @@ impl ISA {
     pub const POINTER_SIZE: usize = 8;
 
     /// Calculates the body's stack size and the local's stack offsets and sizes.
-    pub fn process_body(body: &mut ir::Body) {
+    pub fn process_body(body: &mut ir::Body, arena: &Arena<TyK>) {
         let mut stack_size = 0u32;
 
-        body.locals[0].size = body.locals[0].ty.size() as u32;
+        body.locals[0].size = arena.get(body.locals[0].ty.value()).size() as u32;
         for loc in body.locals.iter_mut().skip(1) {
-            loc.stack_offset = align(stack_size as usize, loc.ty.alignment())
+            let ty = arena.get(loc.ty.value());
+            loc.stack_offset = align(stack_size as usize, ty.alignment())
                 .try_into()
                 .unwrap();
-            loc.size = loc.ty.size().try_into().unwrap();
+            loc.size = ty.size().try_into().unwrap();
             stack_size = loc.stack_offset + loc.size;
         }
         // The stack must be aligned to 16 bytes.

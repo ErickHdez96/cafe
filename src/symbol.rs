@@ -1,7 +1,7 @@
 use crate::arena::{Arena, Id};
 use std::{cell::RefCell, collections::HashMap, fmt};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Symbol(Id<Box<str>>);
 
 impl Symbol {
@@ -22,7 +22,7 @@ impl Symbol {
 
     fn intern_raw(value: impl Into<Box<str>>) -> Self {
         let value = value.into();
-        Self::with_mut(|arena| Symbol(arena.intern(value)))
+        Self::with_mut(|arena| Symbol(arena.alloc(value)))
     }
 
     pub fn resolve(self) -> &'static str {
@@ -61,9 +61,15 @@ impl From<&String> for Symbol {
     }
 }
 
+impl fmt::Debug for Symbol {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.resolve().fmt(f)
+    }
+}
+
 impl fmt::Display for Symbol {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.resolve())
+        self.resolve().fmt(f)
     }
 }
 

@@ -23,7 +23,7 @@ impl ModId {
     }
 
     fn intern_raw(value: ModuleName) -> Self {
-        Self::with_mut(|arena| ModId(arena.intern(Box::new(value))))
+        Self::with_mut(|arena| ModId(arena.alloc(Box::new(value))))
     }
 
     pub fn resolve(self) -> &'static ModuleName {

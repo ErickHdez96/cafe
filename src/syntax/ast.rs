@@ -1,6 +1,6 @@
-use std::{fmt, rc::Rc};
+use std::fmt;
 
-use crate::{env::Env, expander::binding::Binding, span::Span, symbol::Symbol, ty::TyK};
+use crate::{env::Env, expander::binding::Binding, span::Span, symbol::Symbol, ty::Ty};
 
 pub use self::mod_id::ModId;
 
@@ -19,7 +19,7 @@ pub struct Module {
     pub exports: Env<'static, Symbol, Binding>,
     /// All the root bindings (e.g. macro, value) of the module.
     pub bindings: Env<'static, Symbol, Binding>,
-    pub types: Option<Env<'static, Symbol, Rc<TyK>>>,
+    pub types: Option<Env<'static, Symbol, Ty>>,
     pub body: Expr,
 }
 
@@ -45,7 +45,7 @@ pub struct ModuleInterface {
     // TODO: bring Binding here
     /// Exported bindings.
     pub bindings: Env<'static, Symbol, Binding>,
-    pub types: Option<Env<'static, Symbol, Rc<TyK>>>,
+    pub types: Option<Env<'static, Symbol, Ty>>,
     pub dependencies: Vec<ModId>,
 }
 
@@ -280,7 +280,7 @@ impl fmt::Debug for Define {
 pub struct Expr {
     pub span: Span,
     pub kind: ExprKind,
-    pub ty: Rc<TyK>,
+    pub ty: Option<Ty>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -315,7 +315,7 @@ impl Expr {
         Self {
             span: self.span,
             kind: ExprKind::Error(Box::new(Item::Expr(self))),
-            ty: Rc::default(),
+            ty: None,
         }
     }
 
@@ -323,8 +323,8 @@ impl Expr {
     pub fn into_quote(self) -> Self {
         Self {
             span: self.span,
-            ty: Rc::default(),
             kind: ExprKind::Quote(Box::new(self)),
+            ty: None,
         }
     }
 
@@ -332,7 +332,7 @@ impl Expr {
         Self {
             span: Span::dummy(),
             kind: ExprKind::Void,
-            ty: Rc::default(),
+            ty: None,
         }
     }
 

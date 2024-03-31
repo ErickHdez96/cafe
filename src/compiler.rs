@@ -10,6 +10,7 @@ use crate::{
         ExpanderResult, ExpanderResultMod,
     },
     file::{FileId, SourceFile},
+    interner::Interner,
     rnrs::{core_expander_interface, intrinsics_interface},
     symbol::Symbol,
     syntax::{
@@ -17,7 +18,6 @@ use crate::{
         cst::Cst,
         parser::{parse_source_file, ParseResult},
     },
-    ty::BuiltinTys,
     tyc::typecheck_module,
 };
 
@@ -27,6 +27,7 @@ pub type Res<T> = Result<T, Diagnostic>;
 pub struct Compiler {
     pub config: CompilerConfig,
     store: RefCell<CompilerStore>,
+    interner: Interner,
     env: Env<'static, Symbol, Binding>,
     diagnostics: RefCell<Vec<Diagnostic>>,
 }
@@ -42,11 +43,12 @@ impl Compiler {
         let s = Self {
             config: CompilerConfig::default(),
             store: RefCell::default(),
+            interner: Interner::default(),
             env: intrinsics_env(),
             diagnostics: RefCell::default(),
         };
         s.feed_module(core_expander_interface());
-        s.feed_module(intrinsics_interface());
+        s.feed_module(intrinsics_interface(&s.interner.builtins.types));
         s
     }
 
@@ -161,15 +163,24 @@ impl Compiler {
         ))
     }
 
-    pub fn pass_typecheck(&self, mod_: &mut Module, builtin_tys: BuiltinTys) {
-        let diags = typecheck_module(mod_, builtin_tys, |mid| {
-            self.store
-                .borrow()
-                .module_interfaces
-                .get(&mid)
-                .map(Rc::clone)
-                .unwrap()
-        });
+    pub fn pass_typecheck(&mut self, mid: ModId) {
+        let mut store = self.store.borrow_mut();
+        let mod_ =
+            Rc::get_mut(store.modules.get_mut(&mid).unwrap()).expect("module should be unique");
+
+        let diags = typecheck_module(
+            mod_,
+            &mut self.interner.types,
+            &self.interner.builtins.types,
+            |mid| {
+                self.store
+                    .borrow()
+                    .module_interfaces
+                    .get(&mid)
+                    .map(Rc::clone)
+                    .unwrap()
+            },
+        );
         self.diagnostics.borrow_mut().extend(diags);
     }
 
@@ -209,7 +220,7 @@ impl Compiler {
         Ok(self.get_mod(mid).unwrap())
     }
 
-    fn run_typecheck_module(&self, mid: ModId) -> Res<()> {
+    fn run_typecheck_module(&mut self, mid: ModId) -> Res<()> {
         if let Some(mod_) = self.get_mod(mid) {
             if mod_.types.is_some() {
                 return Ok(());
@@ -229,14 +240,7 @@ impl Compiler {
             }
         }
 
-        {
-            let mut store = self.store.borrow_mut();
-            let builtin_tys = store.builtin_tys.clone();
-            self.pass_typecheck(
-                Rc::get_mut(store.modules.get_mut(&mid).unwrap()).expect("module should be unique"),
-                builtin_tys,
-            );
-        }
+        self.pass_typecheck(mid);
 
         let env = self.store.borrow().get_mod(mid).unwrap().types.clone();
         Rc::get_mut(
@@ -251,12 +255,12 @@ impl Compiler {
         Ok(())
     }
 
-    pub fn typecheck_module(&self, mid: ModId) -> Res<Rc<Module>> {
+    pub fn typecheck_module(&mut self, mid: ModId) -> Res<Rc<Module>> {
         self.run_typecheck_module(mid)?;
         self.get_mod(mid).ok_or_else(|| panic!("expected module"))
     }
 
-    pub fn compile_script(&self, path: impl AsRef<path::Path>) -> Res<Rc<Module>> {
+    pub fn compile_script(&mut self, path: impl AsRef<path::Path>) -> Res<Rc<Module>> {
         let mid = ModuleName::script();
         self.feed_file(mid, path.as_ref())?;
         self.typecheck_module(mid)
@@ -303,7 +307,6 @@ struct CompilerStore {
     module_file: HashMap<ModId, FileId>,
     modules: HashMap<ModId, Rc<Module>>,
     module_interfaces: HashMap<ModId, Rc<ModuleInterface>>,
-    builtin_tys: BuiltinTys,
 }
 
 impl CompilerStore {

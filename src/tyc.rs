@@ -1,29 +1,34 @@
 use std::rc::Rc;
 
 use crate::{
+    arena::Arena,
     diagnostics::Diagnostic,
     env::Env,
+    interner::BuiltinTys,
     symbol::Symbol,
     syntax::{ast, parser},
-    ty::{BuiltinTys, TyCo, TyK},
+    ty::{Ty, TyCo, TyK},
 };
 
 type TyCoEnv<'tyc> = Env<'tyc, Symbol, TyCo>;
 
 struct TypeChecker<'tyc> {
     module: ast::ModId,
-    builtins: BuiltinTys,
+    arena: &'tyc mut Arena<TyK>,
+    builtins: &'tyc BuiltinTys,
     diagnostics: Vec<Diagnostic>,
     get_mod_interface: &'tyc dyn Fn(ast::ModId) -> Rc<ast::ModuleInterface>,
 }
 
 pub fn typecheck_module(
     module: &mut ast::Module,
-    builtins: BuiltinTys,
+    arena: &mut Arena<TyK>,
+    builtins: &BuiltinTys,
     get_mod_interface: impl Fn(ast::ModId) -> Rc<ast::ModuleInterface>,
 ) -> Vec<Diagnostic> {
     let mut tc = TypeChecker {
         module: module.id,
+        arena,
         builtins,
         diagnostics: vec![],
         get_mod_interface: &get_mod_interface,
@@ -34,7 +39,7 @@ pub fn typecheck_module(
 }
 
 impl TypeChecker<'_> {
-    fn mod_(&mut self, mod_: &mut ast::Module) -> Env<'static, Symbol, Rc<TyK>> {
+    fn mod_(&mut self, mod_: &mut ast::Module) -> Env<'static, Symbol, Ty> {
         let mut tys = Env::default();
 
         let ast::ExprKind::Body(body) = &mut mod_.body.kind else {
@@ -50,11 +55,11 @@ impl TypeChecker<'_> {
                 ast::Item::Import(_, _) => {}
                 ast::Item::Mod(_, _) => {}
                 ast::Item::Define(d) => {
-                    tys.insert(d.name.value, TyCo::Ty(Rc::clone(&self.builtins.object)));
+                    tys.insert(d.name.value, TyCo::Ty(self.builtins.object));
                     if let Some(e) = &mut d.expr {
                         self.expr(e, &mut tys);
                         if let Some(ty) = tys.get_immediate_mut(&d.name.value) {
-                            *ty = TyCo::Ty(Rc::clone(&e.ty));
+                            *ty = TyCo::Ty(e.ty.unwrap_or(self.builtins.none));
                         }
                     }
                 }
@@ -70,24 +75,24 @@ impl TypeChecker<'_> {
             .collect::<Env<'_, _, _>>()
     }
 
-    fn expr(&mut self, expr: &mut ast::Expr, tyenv: &mut TyCoEnv) -> Rc<TyK> {
+    fn expr(&mut self, expr: &mut ast::Expr, tyenv: &mut TyCoEnv) -> Ty {
         let ty = match &mut expr.kind {
             ast::ExprKind::Body(body) => {
                 let mut tyenv = tyenv.enter();
-                let mut ret = Rc::clone(&self.builtins.void);
+                let mut ret = self.builtins.void;
                 for item in body {
                     match item {
                         ast::Item::Import(_, _) => {}
                         ast::Item::Mod(_, _) => {}
                         ast::Item::Define(d) => {
-                            tyenv.insert(d.name.value, TyCo::Ty(Rc::clone(&self.builtins.object)));
+                            tyenv.insert(d.name.value, TyCo::Ty(self.builtins.object));
                             if let Some(e) = &mut d.expr {
                                 self.expr(e, &mut tyenv);
                                 if let Some(ty) = tyenv.get_immediate_mut(&d.name.value) {
-                                    *ty = TyCo::Ty(Rc::clone(&e.ty));
+                                    *ty = TyCo::Ty(e.ty.unwrap_or(self.builtins.none));
                                 }
                             }
-                            ret = Rc::clone(&self.builtins.void);
+                            ret = self.builtins.void;
                         }
                         ast::Item::Expr(e) => {
                             ret = self.expr(e, &mut tyenv);
@@ -106,12 +111,12 @@ impl TypeChecker<'_> {
                 }
                 ret.unwrap()
             }
-            ast::ExprKind::Quote(_) => Rc::clone(&self.builtins.object),
+            ast::ExprKind::Quote(_) => self.builtins.object,
             ast::ExprKind::If(cond, r#true, r#false) => {
                 self.expr(cond, tyenv);
                 self.expr(r#true, tyenv);
                 self.expr(r#false, tyenv);
-                Rc::clone(&self.builtins.object)
+                self.builtins.object
             }
             ast::ExprKind::Lambda {
                 formals,
@@ -122,11 +127,11 @@ impl TypeChecker<'_> {
                 for e in l {
                     self.expr(e, tyenv);
                 }
-                Rc::clone(&self.builtins.object)
+                self.builtins.object
             }
-            ast::ExprKind::DottedList(_, _) => Rc::clone(&self.builtins.object),
-            ast::ExprKind::Boolean(_) => Rc::clone(&self.builtins.boolean),
-            ast::ExprKind::Char(_) => Rc::clone(&self.builtins.char),
+            ast::ExprKind::DottedList(_, _) => self.builtins.object,
+            ast::ExprKind::Boolean(_) => self.builtins.boolean,
+            ast::ExprKind::Char(_) => self.builtins.char,
             ast::ExprKind::Var(v) => match self.resolve(v, tyenv) {
                 Some(v) => v.clone().into(),
                 None => {
@@ -136,11 +141,11 @@ impl TypeChecker<'_> {
                             .span(v.span)
                             .finish(),
                     );
-                    Rc::clone(&self.builtins.object)
+                    self.builtins.object
                 }
             },
-            ast::ExprKind::Error(_) => Rc::clone(&self.builtins.object),
-            ast::ExprKind::Void => Rc::clone(&self.builtins.void),
+            ast::ExprKind::Error(_) => self.builtins.object,
+            ast::ExprKind::Void => self.builtins.void,
             ast::ExprKind::Begin(exprs) => {
                 let mut ret = None;
                 for e in exprs {
@@ -149,10 +154,10 @@ impl TypeChecker<'_> {
                 ret.unwrap()
             }
             ast::ExprKind::Number(n) => match n {
-                parser::Number::Fixnum(_) => Rc::clone(&self.builtins.fixnum),
+                parser::Number::Fixnum(_) => self.builtins.i64,
             },
         };
-        expr.ty = Rc::clone(&ty);
+        expr.ty = Some(ty);
         ty
     }
 
@@ -162,25 +167,27 @@ impl TypeChecker<'_> {
         rest: Option<&ast::Ident>,
         expr: &mut ast::Expr,
         tyenv: &mut TyCoEnv,
-    ) -> Rc<TyK> {
+    ) -> Ty {
         let mut tyenv = tyenv.enter();
         for f in formals {
             if !tyenv.has_immediate(&f.value) {
-                tyenv.insert(f.value, TyCo::Ty(Rc::clone(&self.builtins.object)));
+                tyenv.insert(f.value, TyCo::Ty(self.builtins.object));
             }
         }
         if let Some(r) = rest {
-            tyenv.insert(r.value, TyCo::from_ty(&self.builtins.object));
+            tyenv.insert(r.value, TyCo::from_ty(self.builtins.object));
         }
         let ty = self.expr(expr, &mut tyenv);
-        Rc::new(TyK::Lambda {
-            params: formals
-                .iter()
-                .map(|f| tyenv.get(&f.value).cloned().unwrap().into())
-                .collect(),
-            rest: rest.and_then(|r| tyenv.get(&r.value).cloned().map(|v| v.into())),
-            ret: ty,
-        })
+        self.arena
+            .alloc(TyK::Lambda {
+                params: formals
+                    .iter()
+                    .map(|f| tyenv.get(&f.value).cloned().unwrap().into())
+                    .collect(),
+                rest: rest.and_then(|r| tyenv.get(&r.value).cloned().map(|v| v.into())),
+                ret: ty,
+            })
+            .into()
     }
 
     fn resolve<'s>(&'s self, var: &ast::Path, tyenv: &'s TyCoEnv) -> Option<TyCo> {
@@ -189,7 +196,7 @@ impl TypeChecker<'_> {
         } else {
             let mod_int = (self.get_mod_interface)(var.module);
             match mod_int.types.as_ref().and_then(|t| t.get(&var.value)) {
-                Some(ty) => Some(TyCo::from_ty(ty)),
+                Some(ty) => Some(TyCo::from_ty(*ty)),
                 None => {
                     panic!(
                         "Type for binding {} missing from module {}",
@@ -206,20 +213,29 @@ impl TypeChecker<'_> {
 mod tests {
     use expect_test::{expect, Expect};
 
-    use crate::{compiler::Compiler, syntax::ast::ModuleName};
+    use crate::{
+        interner::Interner,
+        test::{test_expand_str_with_libs, typecheck_id, Libs},
+    };
 
     fn check(input: &str, expected: Expect) {
-        let mid = ModuleName::script();
-        let compiler = Compiler::default();
-        compiler.feed_file_contents(mid, "#script", input).unwrap();
-        let module = compiler.typecheck_module(mid).unwrap();
+        let mut interner = Interner::default();
+        let libs = Libs::new(&interner);
+        let module = test_expand_str_with_libs(input, &libs, &mut interner).module;
+        let mid = module.id;
+        libs.define(mid, module);
+        typecheck_id(&libs, mid, &mut interner);
+        let store = libs.modules.borrow();
+        let module = store.get(&mid).unwrap();
+
         let mut out = String::new();
 
         let len = module.types.as_ref().unwrap().iter().len();
         for (i, (name, ty)) in module.types.as_ref().unwrap().iter().enumerate() {
             out.push_str(&format!(
-                "{name}: {ty:#?}{}",
-                if i + 1 < len { "\n" } else { "" }
+                "{name}: {:#?}{}",
+                ty.display(&interner.types),
+                if i + 1 < len { "\n" } else { "" },
             ));
         }
 

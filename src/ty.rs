@@ -1,10 +1,33 @@
-use std::{fmt, rc::Rc};
+use std::fmt;
 
-use crate::{new_id, utils::Id};
+use crate::{
+    arena::{self, Arena},
+    new_id,
+    utils::Id,
+};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Ty(arena::Id<TyK>);
+
+impl Ty {
+    pub const fn value(self) -> arena::Id<TyK> {
+        self.0
+    }
+
+    pub fn display(self, arena: &Arena<TyK>) -> TyDisplay {
+        TyDisplay { ty: self, arena }
+    }
+}
+
+impl From<arena::Id<TyK>> for Ty {
+    fn from(value: arena::Id<TyK>) -> Self {
+        Self(value)
+    }
+}
 
 new_id!(pub struct GenericId(usize));
 
-#[derive(Clone, Default, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub enum TyK {
     #[default]
     None,
@@ -18,11 +41,11 @@ pub enum TyK {
     Void,
     Symbol,
     Lambda {
-        params: Vec<Rc<TyK>>,
-        rest: Option<Rc<TyK>>,
-        ret: Rc<TyK>,
+        params: Vec<Ty>,
+        rest: Option<Ty>,
+        ret: Ty,
     },
-    Pair(Rc<TyK>, Rc<TyK>),
+    Pair(Ty, Ty),
     Generic(GenericId),
     Uninit,
     Error,
@@ -31,61 +54,6 @@ pub enum TyK {
 impl TyK {
     pub fn is_boolean(&self) -> bool {
         matches!(self, TyK::Boolean)
-    }
-}
-
-impl fmt::Debug for TyK {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if f.alternate() {
-            match self {
-                Self::None => write!(f, "none"),
-                Self::SObject => write!(f, "object"),
-                Self::Boolean => write!(f, "boolean"),
-                Self::Char => write!(f, "char"),
-                Self::Number(n) => n.fmt(f),
-                Self::String => write!(f, "string"),
-                Self::Null => write!(f, "null"),
-                Self::Void => write!(f, "void"),
-                Self::Symbol => write!(f, "symbol"),
-                Self::Lambda { params, rest, ret } => write!(
-                    f,
-                    "(-> {}{} {ret:#?})",
-                    params
-                        .iter()
-                        .map(|p| format!("{p:#?}"))
-                        .collect::<Vec<_>>()
-                        .join(" "),
-                    match rest {
-                        Some(r) => format!(" ({r:#?} ...)"),
-                        None => String::new(),
-                    }
-                ),
-                Self::Pair(car, cdr) => write!(f, "pair({car:?}, {cdr:?})"),
-                Self::Generic(id) => write!(f, "'{id}"),
-                Self::Uninit => write!(f, "uninit"),
-                Self::Error => write!(f, "error"),
-            }
-        } else {
-            match self {
-                Self::None => write!(f, "None"),
-                Self::SObject => write!(f, "SObject"),
-                Self::Boolean => write!(f, "Boolean"),
-                Self::Char => write!(f, "Char"),
-                Self::Number(n) => n.fmt(f),
-                Self::String => write!(f, "String"),
-                Self::Null => write!(f, "Null"),
-                Self::Void => write!(f, "Void"),
-                Self::Symbol => write!(f, "Symbol"),
-                Self::Lambda { params, rest, ret } => write!(
-                    f,
-                    "Lambda {{ params: {params:?}, rest: {rest:?}, ret: {ret:?}}}"
-                ),
-                Self::Pair(car, cdr) => write!(f, "Pair({car:?}, {cdr:?})"),
-                Self::Generic(id) => write!(f, "Generic({id})"),
-                Self::Uninit => write!(f, "Uninit"),
-                Self::Error => write!(f, "Error"),
-            }
-        }
     }
 }
 
@@ -102,59 +70,97 @@ impl fmt::Debug for NumberTy {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct BuiltinTys {
-    pub object: Rc<TyK>,
-    pub boolean: Rc<TyK>,
-    pub char: Rc<TyK>,
-    pub fixnum: Rc<TyK>,
-    pub string: Rc<TyK>,
-    pub null: Rc<TyK>,
-    pub void: Rc<TyK>,
-    pub uninit: Rc<TyK>,
+/// Type Constraint
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum TyCo {
+    Ty(Ty),
 }
 
-impl Default for BuiltinTys {
-    fn default() -> Self {
-        Self {
-            object: Rc::new(TyK::SObject),
-            boolean: Rc::new(TyK::Boolean),
-            char: Rc::new(TyK::Char),
-            fixnum: Rc::new(TyK::Number(NumberTy::I64)),
-            string: Rc::new(TyK::String),
-            null: Rc::new(TyK::Null),
-            void: Rc::new(TyK::Void),
-            uninit: Rc::new(TyK::Uninit),
+impl TyCo {
+    pub fn from_ty(ty: Ty) -> Self {
+        Self::Ty(ty)
+    }
+
+    pub fn new_generic(arena: &mut Arena<TyK>) -> TyCo {
+        Self::Ty(arena.alloc(TyK::Generic(GenericId::new())).into())
+    }
+}
+
+impl From<TyCo> for Ty {
+    fn from(value: TyCo) -> Self {
+        match value {
+            TyCo::Ty(ty) => ty,
         }
     }
 }
 
-impl BuiltinTys {
-    pub fn new() -> Self {
-        Self::default()
-    }
+pub struct TyDisplay<'tyc> {
+    pub ty: Ty,
+    pub arena: &'tyc Arena<TyK>,
 }
 
-/// Type Constraint
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum TyCo {
-    Ty(Rc<TyK>),
-}
-
-impl TyCo {
-    pub fn from_ty(ty: &Rc<TyK>) -> Self {
-        Self::Ty(Rc::clone(ty))
-    }
-
-    pub fn new_generic() -> TyCo {
-        Self::Ty(Rc::new(TyK::Generic(GenericId::new())))
-    }
-}
-
-impl From<TyCo> for Rc<TyK> {
-    fn from(value: TyCo) -> Self {
-        match value {
-            TyCo::Ty(ty) => ty,
+impl fmt::Debug for TyDisplay<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if f.alternate() {
+            match self.arena.get(self.ty.0) {
+                TyK::None => write!(f, "none"),
+                TyK::SObject => write!(f, "object"),
+                TyK::Boolean => write!(f, "boolean"),
+                TyK::Char => write!(f, "char"),
+                TyK::Number(n) => n.fmt(f),
+                TyK::String => write!(f, "string"),
+                TyK::Null => write!(f, "null"),
+                TyK::Void => write!(f, "void"),
+                TyK::Symbol => write!(f, "symbol"),
+                TyK::Lambda { params, rest, ret } => write!(
+                    f,
+                    "(-> {}{} {:#?})",
+                    params
+                        .iter()
+                        .map(|p| format!("{:#?}", p.display(self.arena)))
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                    match rest {
+                        Some(r) => format!(" ({:#?} ...)", r.display(self.arena)),
+                        None => String::new(),
+                    },
+                    ret.display(self.arena),
+                ),
+                TyK::Pair(car, cdr) => write!(
+                    f,
+                    "pair({:?}, {:?})",
+                    car.display(self.arena),
+                    cdr.display(self.arena)
+                ),
+                TyK::Generic(id) => write!(f, "'{id}"),
+                TyK::Uninit => write!(f, "uninit"),
+                TyK::Error => write!(f, "error"),
+            }
+        } else {
+            match self.arena.get(self.ty.0) {
+                TyK::None => write!(f, "None"),
+                TyK::SObject => write!(f, "SObject"),
+                TyK::Boolean => write!(f, "Boolean"),
+                TyK::Char => write!(f, "Char"),
+                TyK::Number(n) => n.fmt(f),
+                TyK::String => write!(f, "String"),
+                TyK::Null => write!(f, "Null"),
+                TyK::Void => write!(f, "Void"),
+                TyK::Symbol => write!(f, "Symbol"),
+                TyK::Lambda { params, rest, ret } => write!(
+                    f,
+                    "Lambda {{ params: {params:?}, rest: {rest:?}, ret: {ret:?}}}",
+                ),
+                TyK::Pair(car, cdr) => write!(
+                    f,
+                    "Pair({:?}, {:?})",
+                    car.display(self.arena),
+                    cdr.display(self.arena)
+                ),
+                TyK::Generic(id) => write!(f, "Generic({id})"),
+                TyK::Uninit => write!(f, "Uninit"),
+                TyK::Error => write!(f, "Error"),
+            }
         }
     }
 }

@@ -1,10 +1,19 @@
-use std::{cell::Cell, marker::PhantomData};
+use std::{cell::Cell, fmt, marker::PhantomData};
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Id<T> {
     arena_id: u32,
     idx: usize,
     _phantom: PhantomData<T>,
+}
+
+impl<T> fmt::Debug for Id<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Id")
+            .field("arena_id", &self.arena_id)
+            .field("idx", &self.idx)
+            .finish()
+    }
 }
 
 impl<T: Clone> Copy for Id<T> {}
@@ -34,7 +43,7 @@ impl<T> Arena<T> {
         }
     }
 
-    pub fn intern(&mut self, value: T) -> Id<T> {
+    pub fn alloc(&mut self, value: T) -> Id<T> {
         let id = self.next_id();
         self.items.push(value);
         id
