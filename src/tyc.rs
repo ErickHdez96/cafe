@@ -212,7 +212,7 @@ impl TypeChecker<'_> {
         &mut self,
         formals: &[ast::Ident],
         rest: Option<&ast::Ident>,
-        formal_tys: &mut Vec<TyScheme>,
+        formal_tys: &mut Vec<Ty>,
         expr: &mut ast::Expr,
         ptyenv: &mut TyEnv,
     ) -> Ty {
@@ -240,8 +240,8 @@ impl TypeChecker<'_> {
             self.arena,
         );
         for f in formals {
-            formal_tys.push(
-                self.resolve(
+            let tys = self
+                .resolve(
                     &ast::Path {
                         module: self.module,
                         span: f.span,
@@ -249,8 +249,8 @@ impl TypeChecker<'_> {
                     },
                     &tyenv,
                 )
-                .unwrap(),
-            );
+                .unwrap();
+            formal_tys.push(self.engine.instantiate(&tys, self.arena));
         }
         ty
     }
@@ -399,7 +399,7 @@ impl InferEngine {
                     expr, formal_tys, ..
                 } => {
                     for ty in formal_tys {
-                        *ty = engine.substitute_tys(ty, arena);
+                        *ty = engine.substitute(*ty, arena);
                     }
                     visit_expr(expr, engine, arena);
                 }

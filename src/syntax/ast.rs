@@ -364,7 +364,7 @@ pub enum ExprKind {
         formals: Vec<Ident>,
         rest: Option<Ident>,
         expr: Box<Expr>,
-        formal_tys: Vec<TyScheme>,
+        formal_tys: Vec<Ty>,
     },
     List(Vec<Expr>),
     DottedList(Vec<Expr>, Box<Expr>),

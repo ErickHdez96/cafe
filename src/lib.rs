@@ -10,7 +10,7 @@ pub mod expander;
 pub mod file;
 mod interner;
 pub mod ir;
-//pub mod lower_ast;
+pub mod lower_ast;
 pub mod rnrs;
 pub mod span;
 mod symbol;

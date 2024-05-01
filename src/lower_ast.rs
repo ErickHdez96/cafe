@@ -194,12 +194,29 @@ impl Lowerer<'_> {
                 formals,
                 rest,
                 expr,
+                formal_tys,
             } = &fn_.2.kind
             else {
                 panic!("expected a function: {fn_:#?}");
             };
 
-            let global = self.lower_lambda(fn_.1, formals, rest.as_ref(), expr, fn_.0, &env);
+            assert_eq!(
+                formals.len(),
+                formal_tys.len(),
+                "some formals are lacking a type"
+            );
+            let global = self.lower_lambda(
+                fn_.1,
+                &formals
+                    .iter()
+                    .cloned()
+                    .zip(formal_tys.iter().copied())
+                    .collect::<Vec<_>>(),
+                rest.as_ref(),
+                expr,
+                fn_.0,
+                &env,
+            );
             env.insert(fn_.1.value, global.into());
         }
 
@@ -216,7 +233,7 @@ impl Lowerer<'_> {
     fn lower_lambda(
         &mut self,
         name: &ast::Ident,
-        formals: &[ast::Ident],
+        formals: &[(ast::Ident, Ty)],
         rest: Option<&ast::Ident>,
         body: &ast::Expr,
         span: Span,
@@ -224,21 +241,15 @@ impl Lowerer<'_> {
     ) -> ast::Path {
         self.enter_body();
         let mut env = env.enter();
-        self.body_builder
-            .start(span, self.interner.builtins.types.object);
+        self.body_builder.start(span, body.ty_hint.unwrap());
 
-        for f in formals {
-            let local = self
-                .body_builder
-                .alloc(f.span, self.interner.builtins.types.object);
+        for (f, ty) in formals {
+            let local = self.body_builder.alloc(f.span, *ty);
             env.insert(f.value, local.into());
         }
 
-        if let Some(rest) = rest {
-            let local = self
-                .body_builder
-                .alloc(rest.span, self.interner.builtins.types.object);
-            env.insert(rest.value, local.into());
+        if rest.is_some() {
+            panic!("rest not supported");
         }
 
         let ast::ExprKind::Body(b) = &body.kind else {
@@ -292,11 +303,19 @@ impl Lowerer<'_> {
             ast::ExprKind::Body(_) => panic!("should be handled somewhere else"),
             ast::ExprKind::Let { .. } => todo!(),
             ast::ExprKind::Quote(_) => todo!(),
-            ast::ExprKind::If(cond, r#true, r#false) => {
-                self.lower_if(cond, r#true, r#false, expr.span, local, env)
-            }
+            ast::ExprKind::If(cond, r#true, r#false) => self.lower_if(
+                cond,
+                r#true,
+                r#false,
+                expr.ty_hint.unwrap(),
+                expr.span,
+                local,
+                env,
+            ),
             ast::ExprKind::Lambda { .. } => todo!(),
-            ast::ExprKind::List(l) => self.lower_list(l, expr.span, local, env),
+            ast::ExprKind::List(l) => {
+                self.lower_list(l, expr.ty_hint.unwrap(), expr.span, local, env)
+            }
             ast::ExprKind::DottedList(_, _) => todo!(),
             ast::ExprKind::Boolean(b) => {
                 let l = self.get_or_alloc_local(
@@ -366,16 +385,18 @@ impl Lowerer<'_> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn lower_if(
         &mut self,
         cond: &ast::Expr,
         r#true: &ast::Expr,
         r#false: &ast::Expr,
+        ty: Ty,
         span: Span,
         local: Option<ir::Local>,
         env: &PEnv,
     ) -> ir::Local {
-        let retl = self.get_or_alloc_local(local, span, self.interner.builtins.types.object);
+        let retl = self.get_or_alloc_local(local, span, ty);
         let cl = self.lower_expr(cond, None, env);
         let cond_local = if self
             .body_builder
@@ -437,11 +458,12 @@ impl Lowerer<'_> {
     fn lower_list(
         &mut self,
         list: &[ast::Expr],
+        ty: Ty,
         span: Span,
         local: Option<ir::Local>,
         env: &PEnv,
     ) -> ir::Local {
-        let l = self.get_or_alloc_local(local, span, self.interner.builtins.types.object);
+        let l = self.get_or_alloc_local(local, span, ty);
         let mut elems = list.iter();
 
         let func = {
@@ -531,6 +553,7 @@ impl BodyBuilder {
         self.stmts = vec![];
     }
 
+    /// Starts a new body with span `span` and return type `ty`.
     fn start(&mut self, span: Span, ty: Ty) {
         assert_eq!(
             Vec::<ir::LocalDecl>::new(),
@@ -772,16 +795,16 @@ mod tests {
                  (id #t)",
                 expect![[r#"
                     (pkg
-                      (fn (|{|id| (#script ()) 0:8..2}| [_1: object]) object (0:0..26)
-                        (let ([_0 object (0:0..26)]
-                              [_1 object (0:20..1)])
+                      (fn (|{|id| (#script ()) 0:8..2}| [_1: '1]) '1 (0:0..26)
+                        (let ([_0 '1 (0:0..26)]
+                              [_1 '1 (0:20..1)])
                           (bb 0
                             (copy _0 _1 (0:23..1))
                             (return (0:0..26)))))
                       (fn (|{|@init| (#script ()) 0:0..51}|) void (0:0..51)
                         (let ([_0 void (0:0..51)]
-                              [_1 object (0:44..7)]
-                              [_2 (-> '0 '0) (0:45..2)]
+                              [_1 boolean (0:44..7)]
+                              [_2 (-> '1 '1) (0:45..2)]
                               [_3 boolean (0:48..2)])
                           (bb 0
                             (addressof _2 |{|id| (#script ()) 0:8..2}| (0:45..2))
@@ -807,16 +830,16 @@ mod tests {
                  (id #t)",
                 expect![[r#"
                     (pkg
-                      (fn (|{|id| (id ()) 0:100..2}| [_1: object]) object (0:92..26)
-                        (let ([_0 object (0:92..26)]
-                              [_1 object (0:112..1)])
+                      (fn (|{|id| (id ()) 0:100..2}| [_1: '1]) '1 (0:92..26)
+                        (let ([_0 '1 (0:92..26)]
+                              [_1 '1 (0:112..1)])
                           (bb 0
                             (copy _0 _1 (0:115..1))
                             (return (0:92..26)))))
                       (fn (|{|@init| (#script ()) 0:0..178}|) void (0:0..178)
                         (let ([_0 void (0:0..178)]
-                              [_1 object (0:171..7)]
-                              [_2 (-> '0 '0) (0:172..2)]
+                              [_1 boolean (0:171..7)]
+                              [_2 (-> '1 '1) (0:172..2)]
                               [_3 boolean (0:175..2)])
                           (bb 0
                             (addressof _2 |{|id| (id ()) 0:100..2}| (0:172..2))
