@@ -1,4 +1,5 @@
 use std::{
+    cmp::Ordering,
     collections::{HashMap, HashSet},
     rc::Rc,
 };
@@ -13,6 +14,9 @@ use crate::{
     syntax::{ast, parser},
     ty::{Ty, TyK, TyScheme},
 };
+
+#[cfg(test)]
+mod tests;
 
 type TyEnv<'tyc> = Env<'tyc, Symbol, TyScheme>;
 type TyArena = Arena<TyK>;
@@ -64,7 +68,9 @@ impl TypeChecker<'_> {
                 ast::Item::Define(d) => {
                     tys.insert(d.name.value, self.new_var().into());
                     if let Some(e) = &mut d.expr {
-                        let ty = generalize(self.expr(e, &mut tys), &tys, self.arena);
+                        let ty = self.expr(e, &mut tys);
+                        let ty = self.engine.substitute(ty, self.arena);
+                        let ty = generalize(ty, &tys, self.arena);
                         d.ty = Some(ty.clone());
                         if let Some(tys) = tys.get_immediate_mut(&d.name.value) {
                             *tys = ty;
@@ -129,12 +135,18 @@ impl TypeChecker<'_> {
             //    }
             //    ret.unwrap()
             //}
-            //ast::ExprKind::If(cond, r#true, r#false) => {
-            //    self.expr(cond, tyenv);
-            //    self.expr(r#true, tyenv);
-            //    self.expr(r#false, tyenv);
-            //    self.builtins.object.into()
-            //}
+            ast::ExprKind::If(cond, r#true, r#false) => {
+                let condty = self.expr(cond, tyenv);
+                self.engine
+                    .unify(self.builtins.boolean, condty, cond.span, self.arena);
+                let truety = self.expr(r#true, tyenv);
+                let falsety = self.expr(r#false, tyenv);
+                let retty = self.new_var();
+                self.engine.unify(retty, truety, r#true.span, self.arena);
+                self.engine.unify(retty, falsety, r#false.span, self.arena);
+
+                retty
+            }
             ast::ExprKind::Lambda {
                 formals,
                 rest,
@@ -268,16 +280,21 @@ impl TypeChecker<'_> {
     }
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+enum Constraint {
+    Eq,
+}
+
 #[derive(Debug, Default)]
 struct InferEngine {
     generic_id: usize,
-    substitutions: Vec<Substitution>,
+    substitutions: HashMap<Ty, (Ty, Constraint)>,
 }
 
 impl InferEngine {
     fn new_var(&mut self, arena: &mut TyArena) -> Ty {
         let id = self.generic_id;
-        self.generic_id += self.generic_id;
+        self.generic_id += 1;
         arena.alloc(TyK::Var(id)).into()
     }
 
@@ -288,12 +305,19 @@ impl InferEngine {
 
         match (arena.get(left.value()), arena.get(right.value())) {
             // TODO: Check if right occurs in left
-            (_, TyK::Var(_)) => self.substitutions.push(Substitution::Eq {
-                left: right,
-                right: left,
-            }),
+            (_, TyK::Var(_)) => match self.substitutions.get(&right) {
+                Some((ty, Constraint::Eq)) => self.unify(left, *ty, span, arena),
+                None => {
+                    self.substitutions.insert(right, (left, Constraint::Eq));
+                }
+            },
             // TODO: Check if left occurs in right
-            (TyK::Var(_), _) => self.substitutions.push(Substitution::Eq { left, right }),
+            (TyK::Var(_), _) => match self.substitutions.get(&left) {
+                Some((ty, Constraint::Eq)) => self.unify(*ty, right, span, arena),
+                None => {
+                    self.substitutions.insert(left, (right, Constraint::Eq));
+                }
+            },
             (
                 TyK::Lambda {
                     params: lparams,
@@ -366,8 +390,17 @@ impl InferEngine {
                 }
                 ast::ExprKind::Let { .. } => todo!(),
                 ast::ExprKind::Quote(_) => todo!(),
-                ast::ExprKind::If(_, _, _) => todo!(),
-                ast::ExprKind::Lambda { expr, .. } => {
+                ast::ExprKind::If(c, t, f) => {
+                    visit_expr(c, engine, arena);
+                    visit_expr(t, engine, arena);
+                    visit_expr(f, engine, arena);
+                }
+                ast::ExprKind::Lambda {
+                    expr, formal_tys, ..
+                } => {
+                    for ty in formal_tys {
+                        *ty = engine.substitute_tys(ty, arena);
+                    }
                     visit_expr(expr, engine, arena);
                 }
                 ast::ExprKind::List(exprs) => {
@@ -442,12 +475,8 @@ impl InferEngine {
                 ty
             }
             TyK::Pair(_, _) => todo!(),
-            TyK::Var(_) if !bounded.contains(&ty) => match self
-                .substitutions
-                .iter()
-                .find(|Substitution::Eq { left, .. }| *left == ty)
-            {
-                Some(Substitution::Eq { right, .. }) => *right,
+            TyK::Var(_) if !bounded.contains(&ty) => match self.substitutions.get(&ty) {
+                Some((right, Constraint::Eq)) => self.do_substitute_ty(*right, bounded, arena),
                 None => ty,
             },
             TyK::Var(_) => ty,
@@ -517,11 +546,18 @@ impl InferEngine {
             }
         }
     }
-}
 
-#[derive(Debug)]
-enum Substitution {
-    Eq { left: Ty, right: Ty },
+    #[allow(dead_code)]
+    fn dbg(&self, arena: &TyArena) {
+        for (from, (to, c)) in &self.substitutions {
+            eprintln!(
+                "{:#?} = {:#?} : {:?}",
+                from.with_arena(arena),
+                to.with_arena(arena),
+                c
+            );
+        }
+    }
 }
 
 fn generalize(ty: Ty, env: &TyEnv, arena: &mut TyArena) -> TyScheme {
@@ -530,10 +566,14 @@ fn generalize(ty: Ty, env: &TyEnv, arena: &mut TyArena) -> TyScheme {
     }
     let free_vars_in_ty = free_variables_in_type(ty, arena);
     let free_vars_in_env = free_variables_in_env(env, arena);
-    let diff = free_vars_in_ty
+    let mut diff = free_vars_in_ty
         .difference(&free_vars_in_env)
         .copied()
-        .collect();
+        .collect::<Vec<_>>();
+    diff.sort_by(|a, b| match (arena.get(a.value()), arena.get(b.value())) {
+        (TyK::Var(a), TyK::Var(b)) => a.cmp(b),
+        _ => Ordering::Less,
+    });
     TyScheme::QTy(diff, Rc::new(ty.into()))
 }
 
@@ -611,140 +651,6 @@ fn do_free_variables_in_type_scheme(
             for g in generics {
                 bound.remove(g);
             }
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use expect_test::{expect, Expect};
-
-    use crate::{
-        arena::WithOptionalArena,
-        interner::Interner,
-        test::{test_expand_str_with_libs, typecheck_id, Libs},
-    };
-
-    fn check(input: &str, expected_bindings: Expect, expected_mod: Expect) {
-        let mut interner = Interner::default();
-        let libs = Libs::new(&mut interner);
-        let module = test_expand_str_with_libs(input, &libs, &mut interner).module;
-        let mid = module.id;
-        libs.define(mid, module);
-        typecheck_id(&libs, mid, &mut interner);
-        let store = libs.modules.borrow();
-        let module = store.get(&mid).unwrap();
-
-        let mut out = String::new();
-
-        let len = module.types.as_ref().unwrap().iter().len();
-        for (i, (name, ty)) in module.types.as_ref().unwrap().iter().enumerate() {
-            out.push_str(&format!(
-                "{name}: {:#?}{}",
-                ty.with_arena(&interner.types),
-                if i + 1 < len { "\n" } else { "" },
-            ));
-        }
-
-        expected_bindings.assert_eq(&out);
-        expected_mod.assert_debug_eq(&WithOptionalArena {
-            arena: Some(&interner.types),
-            item: &module.body,
-        });
-    }
-
-    #[test]
-    fn boolean() {
-        check(
-            "(import (rnrs expander core))
-             (define a #t)",
-            expect!["a: boolean"],
-            expect![[r#"
-                {body 0:0..56
-                  {import (rnrs expander core ())@0:0..29}
-                  {define@0:43..13
-                    {|a| : boolean 0:51..1}
-                    {#t : boolean 0:53..2}}}
-            "#]],
-        );
-    }
-
-    #[test]
-    fn char() {
-        check(
-            r"(import (rnrs expander core))
-              (define a #\λ)",
-            expect!["a: char"],
-            expect![[r#"
-                {body 0:0..59
-                  {import (rnrs expander core ())@0:0..29}
-                  {define@0:44..15
-                    {|a| : char 0:52..1}
-                    {#\λ : char 0:54..4}}}
-            "#]],
-        );
-    }
-
-    #[test]
-    fn number() {
-        check(
-            r"(import (rnrs expander core))
-              (define a 1)",
-            expect!["a: i64"],
-            expect![[r#"
-                {body 0:0..56
-                  {import (rnrs expander core ())@0:0..29}
-                  {define@0:44..12
-                    {|a| : i64 0:52..1}
-                    {1 : i64 0:54..1}}}
-            "#]],
-        );
-    }
-
-    mod function {
-        use super::*;
-
-        #[test]
-        fn id() {
-            check(
-                r"(import (rnrs expander core))
-                  (define a (lambda (x) x))",
-                expect!["a: (∀ '(a) (-> a a))"],
-                expect![[r#"
-                    {body 0:0..73
-                      {import (rnrs expander core ())@0:0..29}
-                      {define@0:48..25
-                        {|a| : (∀ '(a) (-> a a)) 0:56..1}
-                        {λ : (-> '0 '0) 0:58..14
-                          ({|x| : '0 0:67..1}})
-                          #f
-                          {body 0:58..14
-                            {var |x| : '0 (#script ()) 0:70..1}}}}}
-                "#]],
-            );
-        }
-
-        #[test]
-        fn simple_number() {
-            check(
-                r"(import (rnrs expander core))
-                  (define double (lambda (a) (+ a a)))",
-                expect!["double: (∀ '() (-> i64 i64))"],
-                expect![[r#"
-                    {body 0:0..84
-                      {import (rnrs expander core ())@0:0..29}
-                      {define@0:48..36
-                        {|double| : (∀ '() (-> i64 i64)) 0:56..6}
-                        {λ : (-> i64 i64) 0:63..20
-                          ({|a| : i64 0:72..1}})
-                          #f
-                          {body 0:63..20
-                            {list 0:75..7
-                              {var |+| : (-> i64 i64 i64) (rnrs intrinsics ()) 0:76..1}
-                              {var |a| : i64 (#script ()) 0:78..1}
-                              {var |a| : i64 (#script ()) 0:80..1}}}}}}
-                "#]],
-            );
         }
     }
 }

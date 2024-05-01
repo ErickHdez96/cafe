@@ -76,7 +76,6 @@ impl From<Id<TyK>> for Ty {
 pub enum TyK {
     #[default]
     None,
-    /// Generic Scheme object.
     SObject,
     Boolean,
     Char,

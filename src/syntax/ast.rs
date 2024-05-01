@@ -598,9 +598,12 @@ impl fmt::Debug for WithOptionalArena<'_, TyK, Expr> {
                         width = width + INDENTATION_WIDTH
                     )
                 }
-                ExprKind::If(cond, tru, fls) => write!(
+                ExprKind::If(cond, r#true, r#false) => write!(
                     f,
-                    "{indentation}{{if {span}\n{cond:#width$?}\n{tru:#width$?}\n{fls:#width$?}}}",
+                    "{indentation}{{if {span}\n{:#width$?}\n{:#width$?}\n{:#width$?}}}",
+                    cond.with_maybe_arena(self.arena),
+                    r#true.with_maybe_arena(self.arena),
+                    r#false.with_maybe_arena(self.arena),
                     width = width + INDENTATION_WIDTH,
                 ),
                 ExprKind::Void => write!(f, "{indentation}{{void {span}}}"),
