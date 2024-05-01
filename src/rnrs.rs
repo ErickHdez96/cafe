@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use crate::{
     env::Env,
     expander::{self, binding::Binding, scopes::Scopes},
@@ -5,7 +7,7 @@ use crate::{
     span::Span,
     symbol::Symbol,
     syntax::ast,
-    ty::{Ty, TyK},
+    ty::{TyK, TyScheme},
 };
 
 pub fn core_expander_interface() -> ast::ModuleInterface {
@@ -75,7 +77,7 @@ pub fn intrinsics_interface(interner: &mut Interner) -> ast::ModuleInterface {
 fn arithmetic(
     mid: ast::ModId,
     benv: &mut Env<Symbol, Binding>,
-    tyenv: &mut Env<Symbol, Ty>,
+    tyenv: &mut Env<Symbol, TyScheme>,
     interner: &mut Interner,
 ) {
     let plus = "+".into();
@@ -89,14 +91,20 @@ fn arithmetic(
     );
     tyenv.insert(
         plus,
-        interner
-            .types
-            .alloc(TyK::Lambda {
-                params: vec![],
-                rest: Some(interner.builtins.types.array_i64),
-                ret: interner.builtins.types.i64,
-            })
-            .into(),
+        TyScheme::QTy(
+            vec![],
+            Rc::new(
+                interner
+                    .types
+                    .alloc(TyK::Lambda {
+                        params: vec![interner.builtins.types.i64, interner.builtins.types.i64],
+                        rest: None,
+                        ret: interner.builtins.types.i64,
+                        generics: vec![],
+                    })
+                    .into(),
+            ),
+        ),
     );
 
     let minus = "-".into();
@@ -116,6 +124,7 @@ fn arithmetic(
                 params: vec![],
                 rest: Some(interner.builtins.types.array_i64),
                 ret: interner.builtins.types.i64,
+                generics: vec![],
             })
             .into(),
     );
@@ -137,6 +146,7 @@ fn arithmetic(
                 params: vec![],
                 rest: Some(interner.builtins.types.array_i64),
                 ret: interner.builtins.types.i64,
+                generics: vec![],
             })
             .into(),
     );
@@ -158,6 +168,7 @@ fn arithmetic(
                 params: vec![],
                 rest: Some(interner.builtins.types.array_i64),
                 ret: interner.builtins.types.i64,
+                generics: vec![],
             })
             .into(),
     );
@@ -166,7 +177,7 @@ fn arithmetic(
 fn logical(
     mid: ast::ModId,
     benv: &mut Env<Symbol, Binding>,
-    tyenv: &mut Env<Symbol, Ty>,
+    tyenv: &mut Env<Symbol, TyScheme>,
     interner: &mut Interner,
 ) {
     let eq = "=".into();
@@ -186,6 +197,7 @@ fn logical(
                 params: vec![],
                 rest: Some(interner.builtins.types.array_i64),
                 ret: interner.builtins.types.i64,
+                generics: vec![],
             })
             .into(),
     );
@@ -207,6 +219,7 @@ fn logical(
                 params: vec![],
                 rest: Some(interner.builtins.types.array_i64),
                 ret: interner.builtins.types.i64,
+                generics: vec![],
             })
             .into(),
     );
@@ -228,6 +241,7 @@ fn logical(
                 params: vec![],
                 rest: Some(interner.builtins.types.array_i64),
                 ret: interner.builtins.types.i64,
+                generics: vec![],
             })
             .into(),
     );
@@ -249,6 +263,7 @@ fn logical(
                 params: vec![],
                 rest: Some(interner.builtins.types.array_i64),
                 ret: interner.builtins.types.i64,
+                generics: vec![],
             })
             .into(),
     );
@@ -270,6 +285,7 @@ fn logical(
                 params: vec![],
                 rest: Some(interner.builtins.types.array_i64),
                 ret: interner.builtins.types.i64,
+                generics: vec![],
             })
             .into(),
     );
@@ -278,7 +294,7 @@ fn logical(
 fn list(
     mid: ast::ModId,
     benv: &mut Env<Symbol, Binding>,
-    tyenv: &mut Env<Symbol, Ty>,
+    tyenv: &mut Env<Symbol, TyScheme>,
     interner: &mut Interner,
 ) {
     let cons = "cons".into();
@@ -301,6 +317,7 @@ fn list(
                 ],
                 rest: None,
                 ret: interner.builtins.types.object,
+                generics: vec![],
             })
             .into(),
     );
@@ -309,7 +326,7 @@ fn list(
 fn boolean(
     mid: ast::ModId,
     benv: &mut Env<Symbol, Binding>,
-    tyenv: &mut Env<Symbol, Ty>,
+    tyenv: &mut Env<Symbol, TyScheme>,
     interner: &mut Interner,
 ) {
     let truthy = "truthy?".into();
@@ -329,6 +346,7 @@ fn boolean(
                 params: vec![interner.builtins.types.object],
                 rest: None,
                 ret: interner.builtins.types.boolean,
+                generics: vec![],
             })
             .into(),
     );

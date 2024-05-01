@@ -302,7 +302,7 @@ impl Lowerer<'_> {
                 let l = self.get_or_alloc_local(
                     local,
                     expr.span,
-                    expr.ty.unwrap_or(self.interner.builtins.types.none),
+                    expr.ty_hint.unwrap_or(self.interner.builtins.types.none),
                 );
                 self.body_builder.load_i(
                     l,
@@ -315,7 +315,7 @@ impl Lowerer<'_> {
                 let l = self.get_or_alloc_local(
                     local,
                     expr.span,
-                    expr.ty.unwrap_or(self.interner.builtins.types.none),
+                    expr.ty_hint.unwrap_or(self.interner.builtins.types.none),
                 );
                 self.body_builder
                     .load_i(l, ir::Constant::new(*c as u64, expr.span), expr.span);
@@ -325,7 +325,7 @@ impl Lowerer<'_> {
                 let l = self.get_or_alloc_local(
                     local,
                     expr.span,
-                    expr.ty.unwrap_or(self.interner.builtins.types.none),
+                    expr.ty_hint.unwrap_or(self.interner.builtins.types.none),
                 );
                 match n {
                     parser::Number::Fixnum(fx) => {
@@ -346,7 +346,7 @@ impl Lowerer<'_> {
                 let l = self.get_or_alloc_local(
                     local,
                     expr.span,
-                    expr.ty.unwrap_or(self.interner.builtins.types.none),
+                    expr.ty_hint.unwrap_or(self.interner.builtins.types.none),
                 );
 
                 match place {

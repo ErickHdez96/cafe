@@ -2,7 +2,7 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use crate::{
     asm,
-    codegen::codegen,
+    //codegen::codegen,
     diagnostics::Diagnostic,
     env::Env,
     expander::{
@@ -11,7 +11,7 @@ use crate::{
     },
     interner::Interner,
     ir,
-    lower_ast::lower_ast,
+    //lower_ast::lower_ast,
     rnrs::{core_expander_interface, intrinsics_interface},
     span::Span,
     symbol::Symbol,
@@ -104,34 +104,35 @@ pub fn test_expand_str_with_libs(
     res
 }
 
-pub fn test_lower_str(input: &str, interner: &mut Interner) -> ir::Package {
-    let libs = Libs::new(interner);
-
-    let res = test_expand_str_with_libs(input, &libs, interner);
-    let mid = res.module.id;
-    libs.define(mid, res.module);
-    typecheck_id(&libs, mid, interner);
-
-    let intrinsics_mid = ast::ModuleName::from_strings(vec!["rnrs", "intrinsics"]);
-    let store = libs.modules.borrow();
-    let module = store.get(&mid).unwrap();
-
-    match lower_ast(
-        &module,
-        intrinsics_mid,
-        &|mid| libs.import_mod(mid),
-        &interner,
-    ) {
-        Ok(p) => p,
-        Err(d) => {
-            assert_eq!(Vec::<Diagnostic>::new(), d);
-            unreachable!();
-        }
-    }
-}
+//pub fn test_lower_str(input: &str, interner: &mut Interner) -> ir::Package {
+//    let libs = Libs::new(interner);
+//
+//    let res = test_expand_str_with_libs(input, &libs, interner);
+//    let mid = res.module.id;
+//    libs.define(mid, res.module);
+//    typecheck_id(&libs, mid, interner);
+//
+//    let intrinsics_mid = ast::ModuleName::from_strings(vec!["rnrs", "intrinsics"]);
+//    let store = libs.modules.borrow();
+//    let module = store.get(&mid).unwrap();
+//
+//    match lower_ast(
+//        &module,
+//        intrinsics_mid,
+//        &|mid| libs.import_mod(mid),
+//        &interner,
+//    ) {
+//        Ok(p) => p,
+//        Err(d) => {
+//            assert_eq!(Vec::<Diagnostic>::new(), d);
+//            unreachable!();
+//        }
+//    }
+//}
 
 pub fn test_codegen_str(input: &str, interner: &mut Interner) -> Vec<asm::Inst> {
-    codegen(test_lower_str(input, interner), &mut interner.types)
+    todo!()
+    //codegen(test_lower_str(input, interner), &mut interner.types)
 }
 
 pub struct Libs {
@@ -150,7 +151,7 @@ impl Libs {
             exports: intrinsics.bindings,
             bindings: Env::default(),
             body: ast::Expr::dummy(),
-            types: Some(Env::default()),
+            types: intrinsics.types,
         });
         let intrinsics_int = Rc::new(intrinsics.to_interface());
 

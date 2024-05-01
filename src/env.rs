@@ -10,7 +10,7 @@ use std::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum Parent<'parent, T> {
+pub enum Parent<'parent, T> {
     Owned(Box<T>),
     Rc(Rc<T>),
     Ref(&'parent T),
@@ -147,6 +147,15 @@ impl<'p, K, V> Env<'p, K, V> {
 
     pub fn set_bindings(&mut self, bindings: HashMap<K, V>) {
         self.bindings = bindings;
+    }
+
+    pub fn parent(&self) -> Option<&Self> {
+        match &self.parent {
+            Some(Parent::Owned(o)) => Some(o),
+            Some(Parent::Rc(o)) => Some(o),
+            Some(Parent::Ref(o)) => Some(o),
+            None => None,
+        }
     }
 }
 

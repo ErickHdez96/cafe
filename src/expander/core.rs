@@ -48,6 +48,7 @@ pub fn define_transformer(
         span,
         name,
         expr: Some(Box::new(expr)),
+        ty: None,
     }
     .into()
 }
@@ -78,7 +79,7 @@ pub fn if_transformer(
             .unwrap_or_else(|| ast::Expr {
                 span,
                 kind: ast::ExprKind::Void,
-                ty: None,
+                ty_hint: None,
             }),
     );
 
@@ -88,7 +89,7 @@ pub fn if_transformer(
     ast::Expr {
         span,
         kind: ast::ExprKind::If(cond, r#true, r#false),
-        ty: None,
+        ty_hint: None,
     }
     .into()
 }
@@ -107,7 +108,7 @@ pub fn quote_transformer(
     ast::Expr {
         span,
         kind: ast::ExprKind::Quote(expr),
-        ty: None,
+        ty_hint: None,
     }
     .into()
 }
@@ -151,7 +152,7 @@ fn quote_expander(expander: &mut Expander<'_>, cst: Rc<Cst>) -> ast::Expr {
             CstKind::String(_) => todo!(),
             k => todo!("{k:?}"),
         },
-        ty: None,
+        ty_hint: None,
     }
 }
 
@@ -201,10 +202,11 @@ pub fn lambda_transformer(
             expr: Box::new(ast::Expr {
                 span,
                 kind: ast::ExprKind::Body(items),
-                ty: None,
+                ty_hint: None,
             }),
+            formal_tys: vec![],
         },
-        ty: None,
+        ty_hint: None,
     }
     .into()
 }

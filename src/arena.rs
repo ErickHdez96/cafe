@@ -24,6 +24,11 @@ pub struct Arena<T> {
     items: Vec<T>,
 }
 
+pub struct WithOptionalArena<'a, A, T> {
+    pub arena: Option<&'a Arena<A>>,
+    pub item: &'a T,
+}
+
 impl<T> Default for Arena<T> {
     fn default() -> Self {
         Self::new()
@@ -52,6 +57,11 @@ impl<T> Arena<T> {
     pub fn get(&self, id: Id<T>) -> &T {
         assert_eq!(self.id, id.arena_id, "id belongs to a different arena");
         self.items.get(id.idx).expect("invalid id")
+    }
+
+    pub fn get_mut(&mut self, id: Id<T>) -> &mut T {
+        assert_eq!(self.id, id.arena_id, "id belongs to a different arena");
+        self.items.get_mut(id.idx).expect("invalid id")
     }
 
     fn next_id(&self) -> Id<T> {

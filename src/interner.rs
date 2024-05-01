@@ -36,6 +36,7 @@ impl Builtins {
                 i64,
                 void: arena.alloc(TyK::Void).into(),
                 array_i64: arena.alloc(TyK::Array(i64)).into(),
+                error: arena.alloc(TyK::Error).into(),
             },
         }
     }
@@ -50,4 +51,5 @@ pub struct BuiltinTys {
     pub i64: Ty,
     pub void: Ty,
     pub array_i64: Ty,
+    pub error: Ty,
 }

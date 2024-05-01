@@ -1,6 +1,13 @@
 use std::fmt;
 
-use crate::{env::Env, expander::binding::Binding, span::Span, symbol::Symbol, ty::Ty};
+use crate::{
+    arena::{Arena, WithOptionalArena},
+    env::Env,
+    expander::binding::Binding,
+    span::Span,
+    symbol::Symbol,
+    ty::{Ty, TyK, TyScheme},
+};
 
 pub use self::mod_id::ModId;
 
@@ -19,7 +26,7 @@ pub struct Module {
     pub exports: Env<'static, Symbol, Binding>,
     /// All the root bindings (e.g. macro, value) of the module.
     pub bindings: Env<'static, Symbol, Binding>,
-    pub types: Option<Env<'static, Symbol, Ty>>,
+    pub types: Option<Env<'static, Symbol, TyScheme>>,
     pub body: Expr,
 }
 
@@ -31,7 +38,7 @@ impl Module {
             id: self.id,
             bindings: self.exports.clone(),
             dependencies: self.dependencies.clone(),
-            types: None,
+            types: self.types.clone(),
         }
     }
 }
@@ -45,7 +52,7 @@ pub struct ModuleInterface {
     // TODO: bring Binding here
     /// Exported bindings.
     pub bindings: Env<'static, Symbol, Binding>,
-    pub types: Option<Env<'static, Symbol, Ty>>,
+    pub types: Option<Env<'static, Symbol, TyScheme>>,
     pub dependencies: Vec<ModId>,
 }
 
@@ -185,6 +192,20 @@ impl Item {
             _ => None,
         }
     }
+
+    pub fn with_arena<'a>(&'a self, arena: &'a Arena<TyK>) -> WithOptionalArena<'a, TyK, Self> {
+        WithOptionalArena {
+            arena: Some(arena),
+            item: self,
+        }
+    }
+
+    pub fn with_maybe_arena<'a>(
+        &'a self,
+        arena: Option<&'a Arena<TyK>>,
+    ) -> WithOptionalArena<'a, TyK, Self> {
+        WithOptionalArena { arena, item: self }
+    }
 }
 
 impl From<Define> for Item {
@@ -201,8 +222,14 @@ impl From<Expr> for Item {
 
 impl fmt::Debug for Item {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.with_maybe_arena(None).fmt(f)
+    }
+}
+
+impl fmt::Debug for WithOptionalArena<'_, TyK, Item> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if f.alternate() {
-            match self {
+            match self.item {
                 Item::Import(mid, span) => {
                     let width = f.width().unwrap_or_default();
                     let padding = " ".repeat(width);
@@ -220,11 +247,11 @@ impl fmt::Debug for Item {
                     let padding = " ".repeat(width);
                     write!(f, "{padding}{{module {}@{span}}}", mid.resolve(),)
                 }
-                Item::Define(d) => d.fmt(f),
-                Item::Expr(e) => e.fmt(f),
+                Item::Define(d) => d.with_maybe_arena(self.arena).fmt(f),
+                Item::Expr(e) => e.with_maybe_arena(self.arena).fmt(f),
             }
         } else {
-            match self {
+            match self.item {
                 Item::Import(mid, span) => f
                     .debug_tuple("DefExpr::Import")
                     .field(&mid)
@@ -247,30 +274,70 @@ pub struct Define {
     pub span: Span,
     pub name: Ident,
     pub expr: Option<Box<Expr>>,
+    pub ty: Option<TyScheme>,
+}
+
+impl Define {
+    pub fn with_arena<'a>(&'a self, arena: &'a Arena<TyK>) -> WithOptionalArena<'a, TyK, Self> {
+        WithOptionalArena {
+            arena: Some(arena),
+            item: self,
+        }
+    }
+
+    pub fn with_maybe_arena<'a>(
+        &'a self,
+        arena: Option<&'a Arena<TyK>>,
+    ) -> WithOptionalArena<'a, TyK, Self> {
+        WithOptionalArena { arena, item: self }
+    }
 }
 
 impl fmt::Debug for Define {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.with_maybe_arena(None).fmt(f)
+    }
+}
+
+impl fmt::Debug for WithOptionalArena<'_, TyK, Define> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if f.alternate() {
             let width = f.width().unwrap_or_default();
             let padding = " ".repeat(width);
             write!(
                 f,
-                "{padding}{{define@{}\n{:#width$?}{}}}",
-                self.span,
-                self.name,
-                if let Some(e) = &self.expr {
-                    format!("\n{e:#width$?}", width = width + INDENTATION_WIDTH)
+                "{padding}{{define@{}\n{}{}}}",
+                self.item.span,
+                if let (Some(ty), Some(arena)) = (&self.item.ty, self.arena) {
+                    format!(
+                        "{}{{|{}| : {:#?} {}}}",
+                        " ".repeat(width + INDENTATION_WIDTH),
+                        self.item.name.value,
+                        ty.with_arena(arena),
+                        self.item.name.span,
+                    )
+                } else {
+                    format!(
+                        "{:#width$?}",
+                        self.item.name,
+                        width = width + INDENTATION_WIDTH,
+                    )
+                },
+                if let Some(e) = &self.item.expr {
+                    format!(
+                        "\n{:#width$?}",
+                        e.with_maybe_arena(self.arena),
+                        width = width + INDENTATION_WIDTH
+                    )
                 } else {
                     String::new()
                 },
-                width = width + INDENTATION_WIDTH,
             )
         } else {
             f.debug_struct("Define")
-                .field("span", &self.span)
-                .field("name", &self.name)
-                .field("expr", &self.expr)
+                .field("span", &self.item.span)
+                .field("name", &self.item.name)
+                .field("expr", &self.item.expr)
                 .finish()
         }
     }
@@ -280,7 +347,7 @@ impl fmt::Debug for Define {
 pub struct Expr {
     pub span: Span,
     pub kind: ExprKind,
-    pub ty: Option<Ty>,
+    pub ty_hint: Option<Ty>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -297,6 +364,7 @@ pub enum ExprKind {
         formals: Vec<Ident>,
         rest: Option<Ident>,
         expr: Box<Expr>,
+        formal_tys: Vec<TyScheme>,
     },
     List(Vec<Expr>),
     DottedList(Vec<Expr>, Box<Expr>),
@@ -315,7 +383,7 @@ impl Expr {
         Self {
             span: self.span,
             kind: ExprKind::Error(Box::new(Item::Expr(self))),
-            ty: None,
+            ty_hint: None,
         }
     }
 
@@ -324,7 +392,7 @@ impl Expr {
         Self {
             span: self.span,
             kind: ExprKind::Quote(Box::new(self)),
-            ty: None,
+            ty_hint: None,
         }
     }
 
@@ -332,7 +400,7 @@ impl Expr {
         Self {
             span: Span::dummy(),
             kind: ExprKind::Void,
-            ty: None,
+            ty_hint: None,
         }
     }
 
@@ -343,22 +411,46 @@ impl Expr {
     pub fn is_void(&self) -> bool {
         matches!(self.kind, ExprKind::Void)
     }
+
+    pub fn with_arena<'a>(&'a self, arena: &'a Arena<TyK>) -> WithOptionalArena<'a, TyK, Self> {
+        WithOptionalArena {
+            arena: Some(arena),
+            item: self,
+        }
+    }
+
+    pub fn with_maybe_arena<'a>(
+        &'a self,
+        arena: Option<&'a Arena<TyK>>,
+    ) -> WithOptionalArena<'a, TyK, Self> {
+        WithOptionalArena { arena, item: self }
+    }
 }
 
 impl fmt::Debug for Expr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.with_maybe_arena(None).fmt(f)
+    }
+}
+
+impl fmt::Debug for WithOptionalArena<'_, TyK, Expr> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if f.alternate() {
             let width = f.width().unwrap_or_default();
             let indentation = " ".repeat(width);
-            let span = self.span;
+            let span = self.item.span;
 
-            match &self.kind {
+            match &self.item.kind {
                 ExprKind::Body(items) => write!(
                     f,
                     "{indentation}{{body {span}\n{}}}",
                     items
                         .iter()
-                        .map(|e| format!("{e:#width$?}", width = width + INDENTATION_WIDTH))
+                        .map(|e| format!(
+                            "{:#width$?}",
+                            e.with_maybe_arena(self.arena),
+                            width = width + INDENTATION_WIDTH
+                        ))
                         .collect::<Vec<_>>()
                         .join("\n"),
                 ),
@@ -369,52 +461,81 @@ impl fmt::Debug for Expr {
                     f,
                     "{indentation}{{list {span}\n{}}}",
                     l.iter()
-                        .map(|e| format!("{e:#width$?}", width = width + INDENTATION_WIDTH))
+                        .map(|e| format!(
+                            "{:#width$?}",
+                            e.with_maybe_arena(self.arena),
+                            width = width + INDENTATION_WIDTH
+                        ))
                         .collect::<Vec<_>>()
                         .join("\n"),
                 ),
                 ExprKind::DottedList(l, dot) => write!(
                     f,
-                    "{indentation}{{dotted-list {span}\n{}\n{}.\n{dot:#width$?}}}",
+                    "{indentation}{{dotted-list {span}\n{}\n{}.\n{:#width$?}}}",
                     l.iter()
-                        .map(|e| format!("{e:#width$?}", width = width + INDENTATION_WIDTH))
+                        .map(|e| format!(
+                            "{:#width$?}",
+                            e.with_maybe_arena(self.arena),
+                            width = width + INDENTATION_WIDTH
+                        ))
                         .collect::<Vec<_>>()
                         .join("\n"),
                     " ".repeat(width + INDENTATION_WIDTH),
-                    width = width + INDENTATION_WIDTH
+                    dot.with_maybe_arena(self.arena),
+                    width = width + INDENTATION_WIDTH,
                 ),
                 ExprKind::Boolean(b) => {
                     write!(
                         f,
-                        "{indentation}{{{} {span}}}",
+                        "{indentation}{{{}{} {span}}}",
                         if *b { "#t" } else { "#f" },
+                        if let (Some(ty), Some(arena)) = (self.item.ty_hint, self.arena) {
+                            format!(" : {:#?}", ty.with_arena(arena))
+                        } else {
+                            String::new()
+                        }
                     )
                 }
                 ExprKind::Char(c) => {
                     write!(
                         f,
-                        "{indentation}{{#\\{} {span}}}",
+                        "{indentation}{{#\\{}{} {span}}}",
                         if c.is_alphanumeric() {
                             format!("{c}")
                         } else {
                             format!("x{:X}", u32::from(*c))
                         },
+                        if let (Some(ty), Some(arena)) = (self.item.ty_hint, self.arena) {
+                            format!(" : {:#?}", ty.with_arena(arena))
+                        } else {
+                            String::new()
+                        }
                     )
                 }
                 ExprKind::Number(n) => {
                     write!(
                         f,
-                        "{indentation}{{{} {span}}}",
+                        "{indentation}{{{}{} {span}}}",
                         match n {
                             Number::Fixnum(n) => format!("{n}"),
                         },
+                        if let (Some(ty), Some(arena)) = (self.item.ty_hint, self.arena) {
+                            format!(" : {:#?}", ty.with_arena(arena))
+                        } else {
+                            String::new()
+                        }
                     )
                 }
                 ExprKind::Var(path) => {
                     write!(
                         f,
-                        "{indentation}{{var |{}| {} {span}}}",
+                        "{indentation}{{var |{}|{} {} {span}}}",
                         path.value,
+                        if let (Some(ty), Some(arena)) = (self.item.ty_hint, self.arena) {
+                            format!(" : {:#?}", ty.with_arena(arena))
+                        } else {
+                            String::new()
+                        },
                         path.module.resolve(),
                     )
                 }
@@ -422,22 +543,47 @@ impl fmt::Debug for Expr {
                     formals,
                     rest,
                     expr,
-                } => write!(
-                    f,
-                    "{indentation}{{λ {span}\n{}({})\n{}{}\n{expr:#width$?}}}",
-                    " ".repeat(width + INDENTATION_WIDTH),
-                    formals
-                        .iter()
-                        .map(|f| format!("{f:#?}"))
-                        .collect::<Vec<_>>()
-                        .join(" "),
-                    " ".repeat(width + INDENTATION_WIDTH),
-                    match rest {
-                        Some(rest) => format!("{rest:#?}"),
-                        None => String::from("#f"),
-                    },
-                    width = width + INDENTATION_WIDTH
-                ),
+                    formal_tys,
+                } => {
+                    write!(
+                        f,
+                        "{indentation}{{λ{} {span}\n{}({})\n{}{}\n{:#width$?}}}",
+                        if let (Some(ty), Some(arena)) = (self.item.ty_hint, self.arena) {
+                            format!(" : {:#?}", ty.with_arena(arena))
+                        } else {
+                            String::new()
+                        },
+                        " ".repeat(width + INDENTATION_WIDTH),
+                        if formal_tys.is_empty() || self.arena.is_none() {
+                            formals
+                                .iter()
+                                .map(|f| format!("{f:#?}"))
+                                .collect::<Vec<_>>()
+                                .join(" ")
+                        } else {
+                            formals
+                                .iter()
+                                .zip(formal_tys.iter())
+                                .map(|(f, ty)| {
+                                    format!(
+                                        "{{|{}| : {:#?} {}}}}}",
+                                        f.value,
+                                        ty.with_arena(self.arena.unwrap()),
+                                        f.span,
+                                    )
+                                })
+                                .collect::<Vec<_>>()
+                                .join(" ")
+                        },
+                        " ".repeat(width + INDENTATION_WIDTH),
+                        match rest {
+                            Some(rest) => format!("{rest:#?}"),
+                            None => String::from("#f"),
+                        },
+                        expr.with_maybe_arena(self.arena),
+                        width = width + INDENTATION_WIDTH,
+                    )
+                }
                 ExprKind::Error(e) => {
                     write!(
                         f,
@@ -491,9 +637,9 @@ impl fmt::Debug for Expr {
             }
         } else {
             f.debug_struct("Expr")
-                .field("span", &self.span)
-                .field("kind", &self.kind)
-                .field("ty", &self.ty)
+                .field("span", &self.item.span)
+                .field("kind", &self.item.kind)
+                .field("ty", &self.item.ty_hint)
                 .finish()
         }
     }

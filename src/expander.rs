@@ -164,7 +164,7 @@ impl Expander<'_> {
                 body: ast::Expr {
                     span,
                     kind: ast::ExprKind::Body(items),
-                    ty: None,
+                    ty_hint: None,
                 },
                 types: None,
             },
@@ -185,14 +185,14 @@ impl Expander<'_> {
             CstKind::True | CstKind::False => ast::Expr {
                 span,
                 kind: ast::ExprKind::Boolean(cst.kind == CstKind::True),
-                ty: None,
+                ty_hint: None,
             }
             .into(),
             CstKind::Ident(ident) => self.expand_ident(*ident, span, env),
             CstKind::Char(c) => ast::Expr {
                 span,
                 kind: ast::ExprKind::Char(parse_char(c.resolve())),
-                ty: None,
+                ty_hint: None,
             }
             .into(),
             CstKind::Number(n) => ast::Expr {
@@ -204,7 +204,7 @@ impl Expander<'_> {
                         Number::Fixnum(0)
                     }
                 }),
-                ty: None,
+                ty_hint: None,
             }
             .into(),
             CstKind::String(_) => todo!(),
@@ -246,7 +246,7 @@ impl Expander<'_> {
                                 })
                                 .collect(),
                         ),
-                        ty: None,
+                        ty_hint: None,
                     }
                     .into(),
                 },
@@ -260,7 +260,7 @@ impl Expander<'_> {
                             })
                             .collect(),
                     ),
-                    ty: None,
+                    ty_hint: None,
                 }
                 .into(),
             },
@@ -269,7 +269,7 @@ impl Expander<'_> {
                 ast::Expr {
                     span,
                     kind: ast::ExprKind::List(vec![]),
-                    ty: None,
+                    ty_hint: None,
                 }
                 .into()
             }
@@ -287,7 +287,7 @@ impl Expander<'_> {
                     module: *orig_module,
                     value: ident,
                 }),
-                ty: None,
+                ty_hint: None,
             }
             .into(),
             None => {
@@ -299,7 +299,7 @@ impl Expander<'_> {
                         module: self.module,
                         value: ident,
                     }),
-                    ty: None,
+                    ty_hint: None,
                 }
                 .into()
             }

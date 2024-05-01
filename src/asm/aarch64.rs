@@ -30,7 +30,7 @@ impl TyArch for ty::TyK {
             Self::Void => todo!(),
             Self::Symbol => todo!(),
             Self::Pair(_, _) => todo!(),
-            Self::Generic(_) => todo!(),
+            Self::Var(_) => todo!(),
             Self::Uninit => todo!(),
             Self::Error => todo!(),
         }
@@ -51,7 +51,7 @@ impl TyArch for ty::TyK {
             Self::Void => todo!(),
             Self::Symbol => todo!(),
             Self::Pair(_, _) => todo!(),
-            Self::Generic(_) => todo!(),
+            Self::Var(_) => todo!(),
             Self::Uninit => todo!(),
             Self::Error => todo!(),
         }
