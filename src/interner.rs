@@ -30,7 +30,6 @@ impl Builtins {
         Self {
             types: BuiltinTys {
                 none: arena.alloc(TyK::None).into(),
-                object: arena.alloc(TyK::SObject).into(),
                 boolean: arena.alloc(TyK::Boolean).into(),
                 char: arena.alloc(TyK::Char).into(),
                 i64,
@@ -45,7 +44,6 @@ impl Builtins {
 #[derive(Debug)]
 pub struct BuiltinTys {
     pub none: Ty,
-    pub object: Ty,
     pub boolean: Ty,
     pub char: Ty,
     pub i64: Ty,

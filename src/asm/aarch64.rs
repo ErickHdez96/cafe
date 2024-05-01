@@ -24,14 +24,11 @@ impl TyArch for ty::TyK {
             },
             Self::Lambda { .. } => ISA::POINTER_SIZE,
             Self::None => todo!(),
-            Self::SObject => ISA::POINTER_SIZE,
             Self::Null => ISA::POINTER_SIZE,
             Self::Array(_) => ISA::POINTER_SIZE,
             Self::Void => todo!(),
             Self::Symbol => todo!(),
-            Self::Pair(_, _) => todo!(),
             Self::Var(_) => todo!(),
-            Self::Uninit => todo!(),
             Self::Error => todo!(),
         }
     }
@@ -43,16 +40,14 @@ impl TyArch for ty::TyK {
             Self::Number(n) => match n {
                 ty::NumberTy::I64 => ISA::POINTER_SIZE,
             },
-            Self::Lambda { .. } | Self::SObject => ISA::POINTER_SIZE,
+            Self::Lambda { .. } => ISA::POINTER_SIZE,
             Self::Array(_) => ISA::POINTER_SIZE,
             Self::String => todo!(),
             Self::None => todo!(),
             Self::Null => todo!(),
             Self::Void => todo!(),
             Self::Symbol => todo!(),
-            Self::Pair(_, _) => todo!(),
             Self::Var(_) => todo!(),
-            Self::Uninit => todo!(),
             Self::Error => todo!(),
         }
     }

@@ -440,7 +440,6 @@ impl InferEngine {
     fn do_substitute_ty(&self, ty: Ty, bounded: &HashSet<Ty>, arena: &mut TyArena) -> Ty {
         match arena.get(ty.value()) {
             TyK::None
-            | TyK::SObject
             | TyK::Boolean
             | TyK::Char
             | TyK::Number(_)
@@ -448,7 +447,6 @@ impl InferEngine {
             | TyK::Null
             | TyK::Void
             | TyK::Symbol
-            | TyK::Uninit
             | TyK::Error => ty,
 
             TyK::Lambda {
@@ -474,7 +472,6 @@ impl InferEngine {
 
                 ty
             }
-            TyK::Pair(_, _) => todo!(),
             TyK::Var(_) if !bounded.contains(&ty) => match self.substitutions.get(&ty) {
                 Some((right, Constraint::Eq)) => self.do_substitute_ty(*right, bounded, arena),
                 None => ty,
@@ -502,7 +499,6 @@ impl InferEngine {
         fn subst(ty: Ty, substs: &HashMap<Ty, Ty>, arena: &mut TyArena) -> Ty {
             match arena.get(ty.value()) {
                 TyK::None
-                | TyK::SObject
                 | TyK::Boolean
                 | TyK::Char
                 | TyK::Number(_)
@@ -510,7 +506,6 @@ impl InferEngine {
                 | TyK::Null
                 | TyK::Void
                 | TyK::Symbol
-                | TyK::Uninit
                 | TyK::Error => ty,
                 TyK::Lambda {
                     params,
@@ -537,7 +532,6 @@ impl InferEngine {
                         })
                         .into()
                 }
-                TyK::Pair(_, _) => todo!(),
                 TyK::Var(_) => match substs.get(&ty) {
                     Some(ty) => *ty,
                     None => ty,
@@ -604,7 +598,6 @@ fn free_variables_in_env(env: &TyEnv, arena: &TyArena) -> HashSet<Ty> {
 fn do_free_variables_in_type(ty: Ty, free: &mut HashSet<Ty>, bound: &HashSet<Ty>, arena: &TyArena) {
     match arena.get(ty.value()) {
         TyK::None
-        | TyK::SObject
         | TyK::Boolean
         | TyK::Char
         | TyK::Number(_)
@@ -612,7 +605,6 @@ fn do_free_variables_in_type(ty: Ty, free: &mut HashSet<Ty>, bound: &HashSet<Ty>
         | TyK::Null
         | TyK::Void
         | TyK::Symbol
-        | TyK::Uninit
         | TyK::Error => {}
         TyK::Lambda {
             params, rest, ret, ..
@@ -623,7 +615,6 @@ fn do_free_variables_in_type(ty: Ty, free: &mut HashSet<Ty>, bound: &HashSet<Ty>
             assert_eq!(None, rest.as_ref());
             do_free_variables_in_type(*ret, free, bound, arena);
         }
-        TyK::Pair(_, _) => todo!(),
         TyK::Var(_) => {
             if !bound.contains(&ty) {
                 free.insert(ty);

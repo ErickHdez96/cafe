@@ -588,10 +588,10 @@ mod tests {
     #[test]
     fn variables() {
         check(
-            "cons",
+            "and",
             expect![[r#"
-                {body 0:0..4
-                  {var |cons| (rnrs intrinsics ()) 0:0..4}}
+                {body 0:0..3
+                  {var |and| (rnrs intrinsics ()) 0:0..3}}
             "#]],
         );
     }
@@ -599,13 +599,13 @@ mod tests {
     #[test]
     fn function_application() {
         check(
-            r"(cons #t #f)",
+            r"(and #t #f)",
             expect![[r#"
-                {body 0:0..12
-                  {list 0:0..12
-                    {var |cons| (rnrs intrinsics ()) 0:1..4}
-                    {#t 0:6..2}
-                    {#f 0:9..2}}}
+                {body 0:0..11
+                  {list 0:0..11
+                    {var |and| (rnrs intrinsics ()) 0:1..3}
+                    {#t 0:5..2}
+                    {#f 0:8..2}}}
             "#]],
         );
         check(

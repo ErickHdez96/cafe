@@ -76,7 +76,6 @@ impl From<Id<TyK>> for Ty {
 pub enum TyK {
     #[default]
     None,
-    SObject,
     Boolean,
     Char,
     Number(NumberTy),
@@ -84,7 +83,6 @@ pub enum TyK {
     Null,
     Void,
     Symbol,
-    Uninit,
     Error,
 
     Lambda {
@@ -93,7 +91,6 @@ pub enum TyK {
         ret: Ty,
         generics: Vec<Ty>,
     },
-    Pair(Ty, Ty),
     Var(usize),
     Array(Ty),
 }
@@ -223,7 +220,6 @@ impl fmt::Debug for TyArena<'_, '_> {
         if f.alternate() {
             match self.tyk {
                 TyK::None => write!(f, "none"),
-                TyK::SObject => write!(f, "object"),
                 TyK::Boolean => write!(f, "boolean"),
                 TyK::Char => write!(f, "char"),
                 TyK::Number(n) => n.fmt(f),
@@ -247,24 +243,16 @@ impl fmt::Debug for TyArena<'_, '_> {
                     },
                     self.with_ty(*ret),
                 ),
-                TyK::Pair(car, cdr) => write!(
-                    f,
-                    "pair({:?}, {:?})",
-                    car.with_arena(self.arena),
-                    cdr.with_arena(self.arena)
-                ),
                 TyK::Var(id) => match self.generics.as_ref().and_then(|m| m.get(&self.ty)) {
                     Some(c) => write!(f, "{c}"),
                     None => write!(f, "'{id}"),
                 },
                 TyK::Array(ty) => write!(f, "(array {:#?})", self.with_ty(*ty)),
-                TyK::Uninit => write!(f, "uninit"),
                 TyK::Error => write!(f, "error"),
             }
         } else {
             match self.tyk {
                 TyK::None => f.debug_struct("None").finish(),
-                TyK::SObject => f.debug_struct("SObject").finish(),
                 TyK::Boolean => f.debug_struct("Boolean").finish(),
                 TyK::Char => f.debug_struct("Char").finish(),
                 TyK::Number(n) => f.debug_tuple("Number").field(&n).finish(),
@@ -286,83 +274,13 @@ impl fmt::Debug for TyArena<'_, '_> {
                     .field("rest", &rest.map(|rest| rest.with_arena(self.arena)))
                     .field("ret", &ret.with_arena(self.arena))
                     .finish(),
-                TyK::Pair(car, cdr) => write!(
-                    f,
-                    "Pair({:?}, {:?})",
-                    car.with_arena(self.arena),
-                    cdr.with_arena(self.arena)
-                ),
                 TyK::Var(id) => f.debug_tuple("Var").field(&id).finish(),
                 TyK::Array(ty) => f
                     .debug_tuple("Array")
                     .field(&ty.with_arena(self.arena))
                     .finish(),
-                TyK::Uninit => f.debug_struct("Uninit").finish(),
                 TyK::Error => f.debug_struct("Error").finish(),
             }
         }
-    }
-}
-
-pub trait TyVisitor {
-    fn visit(&mut self, ty: Ty, arena: &Arena<TyK>) {
-        match arena.get(ty.0) {
-            TyK::None => self.visit_none(ty),
-            TyK::SObject => self.visit_object(ty),
-            TyK::Boolean => self.visit_boolean(ty),
-            TyK::Char => self.visit_char(ty),
-            TyK::Number(nty) => self.visit_number(ty, *nty),
-            TyK::String => self.visit_string(ty),
-            TyK::Null => self.visit_null(ty),
-            TyK::Void => self.visit_void(ty),
-            TyK::Symbol => self.visit_symbol(ty),
-            TyK::Uninit => self.visit_uinit(ty),
-            TyK::Error => self.visit_error(ty),
-            TyK::Lambda {
-                params,
-                rest,
-                ret,
-                generics,
-            } => self.visit_lambda(ty, params, *rest, *ret, generics, arena),
-            TyK::Pair(_, _) => todo!(),
-            TyK::Var(_) => self.visit_var(ty),
-            TyK::Array(inner_ty) => self.visit_array(ty, *inner_ty, arena),
-        }
-    }
-
-    fn visit_none(&mut self, _ty: Ty) {}
-    fn visit_object(&mut self, _ty: Ty) {}
-    fn visit_boolean(&mut self, _ty: Ty) {}
-    fn visit_char(&mut self, _ty: Ty) {}
-    fn visit_number(&mut self, _ty: Ty, _tyn: NumberTy) {}
-    fn visit_string(&mut self, _ty: Ty) {}
-    fn visit_null(&mut self, _ty: Ty) {}
-    fn visit_void(&mut self, _ty: Ty) {}
-    fn visit_symbol(&mut self, _ty: Ty) {}
-    fn visit_uinit(&mut self, _ty: Ty) {}
-    fn visit_error(&mut self, _ty: Ty) {}
-    fn visit_var(&mut self, _ty: Ty) {}
-    fn visit_lambda(
-        &mut self,
-        _ty: Ty,
-        params: &[Ty],
-        rest: Option<Ty>,
-        retty: Ty,
-        generics: &[Ty],
-        arena: &Arena<TyK>,
-    ) {
-        for p in params {
-            self.visit(*p, arena);
-        }
-        if let Some(ty) = rest {
-            self.visit(ty, arena);
-        }
-        self.visit(retty, arena);
-        for g in generics {
-            self.visit(*g, arena);
-        }
-    }
-    fn visit_array(&mut self, _ty: Ty, inner_ty: Ty, arena: &Arena<TyK>) {
-        self.visit(inner_ty, arena);
     }
 }

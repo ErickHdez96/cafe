@@ -62,7 +62,6 @@ pub fn intrinsics_interface(interner: &mut Interner) -> ast::ModuleInterface {
     let mut tyenv = Env::default();
     arithmetic(mid, &mut benv, &mut tyenv, interner);
     logical(mid, &mut benv, &mut tyenv, interner);
-    list(mid, &mut benv, &mut tyenv, interner);
     boolean(mid, &mut benv, &mut tyenv, interner);
 
     ast::ModuleInterface {
@@ -291,45 +290,13 @@ fn logical(
     );
 }
 
-fn list(
-    mid: ast::ModId,
-    benv: &mut Env<Symbol, Binding>,
-    tyenv: &mut Env<Symbol, TyScheme>,
-    interner: &mut Interner,
-) {
-    let cons = "cons".into();
-    benv.insert(
-        cons,
-        Binding::Value {
-            scopes: Scopes::core(),
-            name: cons,
-            orig_module: mid,
-        },
-    );
-    tyenv.insert(
-        cons,
-        interner
-            .types
-            .alloc(TyK::Lambda {
-                params: vec![
-                    interner.builtins.types.object,
-                    interner.builtins.types.object,
-                ],
-                rest: None,
-                ret: interner.builtins.types.object,
-                generics: vec![],
-            })
-            .into(),
-    );
-}
-
 fn boolean(
     mid: ast::ModId,
     benv: &mut Env<Symbol, Binding>,
     tyenv: &mut Env<Symbol, TyScheme>,
     interner: &mut Interner,
 ) {
-    let truthy = "truthy?".into();
+    let truthy = "not".into();
     benv.insert(
         truthy,
         Binding::Value {
@@ -343,7 +310,57 @@ fn boolean(
         interner
             .types
             .alloc(TyK::Lambda {
-                params: vec![interner.builtins.types.object],
+                params: vec![interner.builtins.types.boolean],
+                rest: None,
+                ret: interner.builtins.types.boolean,
+                generics: vec![],
+            })
+            .into(),
+    );
+    // TODO: Implement as macro
+    let and = "and".into();
+    benv.insert(
+        and,
+        Binding::Value {
+            scopes: Scopes::core(),
+            name: and,
+            orig_module: mid,
+        },
+    );
+    tyenv.insert(
+        and,
+        interner
+            .types
+            .alloc(TyK::Lambda {
+                params: vec![
+                    interner.builtins.types.boolean,
+                    interner.builtins.types.boolean,
+                ],
+                rest: None,
+                ret: interner.builtins.types.boolean,
+                generics: vec![],
+            })
+            .into(),
+    );
+    // TODO: Implement as macro
+    let or = "or".into();
+    benv.insert(
+        or,
+        Binding::Value {
+            scopes: Scopes::core(),
+            name: or,
+            orig_module: mid,
+        },
+    );
+    tyenv.insert(
+        or,
+        interner
+            .types
+            .alloc(TyK::Lambda {
+                params: vec![
+                    interner.builtins.types.boolean,
+                    interner.builtins.types.boolean,
+                ],
                 rest: None,
                 ret: interner.builtins.types.boolean,
                 generics: vec![],
