@@ -347,7 +347,7 @@ impl fmt::Debug for WithOptionalArena<'_, TyK, Define> {
 pub struct Expr {
     pub span: Span,
     pub kind: ExprKind,
-    pub ty_hint: Option<Ty>,
+    pub ty: Option<Ty>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -383,7 +383,7 @@ impl Expr {
         Self {
             span: self.span,
             kind: ExprKind::Error(Box::new(Item::Expr(self))),
-            ty_hint: None,
+            ty: None,
         }
     }
 
@@ -392,7 +392,7 @@ impl Expr {
         Self {
             span: self.span,
             kind: ExprKind::Quote(Box::new(self)),
-            ty_hint: None,
+            ty: None,
         }
     }
 
@@ -400,7 +400,7 @@ impl Expr {
         Self {
             span: Span::dummy(),
             kind: ExprKind::Void,
-            ty_hint: None,
+            ty: None,
         }
     }
 
@@ -489,7 +489,7 @@ impl fmt::Debug for WithOptionalArena<'_, TyK, Expr> {
                         f,
                         "{indentation}{{{}{} {span}}}",
                         if *b { "#t" } else { "#f" },
-                        if let (Some(ty), Some(arena)) = (self.item.ty_hint, self.arena) {
+                        if let (Some(ty), Some(arena)) = (self.item.ty, self.arena) {
                             format!(" : {:#?}", ty.with_arena(arena))
                         } else {
                             String::new()
@@ -505,7 +505,7 @@ impl fmt::Debug for WithOptionalArena<'_, TyK, Expr> {
                         } else {
                             format!("x{:X}", u32::from(*c))
                         },
-                        if let (Some(ty), Some(arena)) = (self.item.ty_hint, self.arena) {
+                        if let (Some(ty), Some(arena)) = (self.item.ty, self.arena) {
                             format!(" : {:#?}", ty.with_arena(arena))
                         } else {
                             String::new()
@@ -519,7 +519,7 @@ impl fmt::Debug for WithOptionalArena<'_, TyK, Expr> {
                         match n {
                             Number::Fixnum(n) => format!("{n}"),
                         },
-                        if let (Some(ty), Some(arena)) = (self.item.ty_hint, self.arena) {
+                        if let (Some(ty), Some(arena)) = (self.item.ty, self.arena) {
                             format!(" : {:#?}", ty.with_arena(arena))
                         } else {
                             String::new()
@@ -531,7 +531,7 @@ impl fmt::Debug for WithOptionalArena<'_, TyK, Expr> {
                         f,
                         "{indentation}{{var |{}|{} {} {span}}}",
                         path.value,
-                        if let (Some(ty), Some(arena)) = (self.item.ty_hint, self.arena) {
+                        if let (Some(ty), Some(arena)) = (self.item.ty, self.arena) {
                             format!(" : {:#?}", ty.with_arena(arena))
                         } else {
                             String::new()
@@ -548,7 +548,7 @@ impl fmt::Debug for WithOptionalArena<'_, TyK, Expr> {
                     write!(
                         f,
                         "{indentation}{{λ{} {span}\n{}({})\n{}{}\n{:#width$?}}}",
-                        if let (Some(ty), Some(arena)) = (self.item.ty_hint, self.arena) {
+                        if let (Some(ty), Some(arena)) = (self.item.ty, self.arena) {
                             format!(" : {:#?}", ty.with_arena(arena))
                         } else {
                             String::new()
@@ -566,7 +566,7 @@ impl fmt::Debug for WithOptionalArena<'_, TyK, Expr> {
                                 .zip(formal_tys.iter())
                                 .map(|(f, ty)| {
                                     format!(
-                                        "{{|{}| : {:#?} {}}}}}",
+                                        "{{|{}| : {:#?} {}}}",
                                         f.value,
                                         ty.with_arena(self.arena.unwrap()),
                                         f.span,
@@ -642,7 +642,7 @@ impl fmt::Debug for WithOptionalArena<'_, TyK, Expr> {
             f.debug_struct("Expr")
                 .field("span", &self.item.span)
                 .field("kind", &self.item.kind)
-                .field("ty", &self.item.ty_hint)
+                .field("ty", &self.item.ty)
                 .finish()
         }
     }

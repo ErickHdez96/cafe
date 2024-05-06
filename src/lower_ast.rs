@@ -11,6 +11,9 @@ use crate::{
     ty::Ty,
 };
 
+#[cfg(test)]
+mod tests;
+
 type PEnv<'p> = Env<'p, Symbol, Place>;
 
 #[derive(Clone, PartialEq, Eq)]
@@ -50,6 +53,7 @@ pub fn lower_ast(
         bodies: vec![],
         lowered_mids: vec![],
         exported_bindings: Env::default(),
+        lambda_counter: 0,
     };
     lowerer.lower_ast(mod_);
 
@@ -74,6 +78,7 @@ struct Lowerer<'i> {
     bodies: Vec<ir::Body>,
     lowered_mids: Vec<ast::ModId>,
     exported_bindings: Env<'static, ast::ModId, PEnv<'static>>,
+    lambda_counter: usize,
 }
 
 impl Lowerer<'_> {
@@ -154,6 +159,7 @@ impl Lowerer<'_> {
                     module: mod_.id,
                     value: "@init".into(),
                 },
+                ty: self.interner.builtins.types.void_fn,
                 param_count: 0,
                 variable_count: 0,
             });
@@ -162,7 +168,7 @@ impl Lowerer<'_> {
     }
 
     fn lower_mod_body(&mut self, body: &[ast::Item]) -> PEnv<'static> {
-        let mut _fns = vec![];
+        let mut fns = vec![];
         let mut _vars = vec![];
         let mut exprs = vec![];
         let mut env = PEnv::default();
@@ -171,7 +177,7 @@ impl Lowerer<'_> {
             match item {
                 ast::Item::Define(d) => match &d.expr {
                     Some(e) if e.is_lambda() => {
-                        _fns.push((d.span, &d.name, e));
+                        fns.push((d.span, &d.name, e, e.ty.unwrap()));
                     }
                     _ => {
                         _vars.push((d.span, &d.name, &d.expr));
@@ -189,13 +195,13 @@ impl Lowerer<'_> {
             }
         }
 
-        for fn_ in _fns {
+        for (span, ident, fn_, ty) in fns {
             let ast::ExprKind::Lambda {
                 formals,
                 rest,
                 expr,
                 formal_tys,
-            } = &fn_.2.kind
+            } = &fn_.kind
             else {
                 panic!("expected a function: {fn_:#?}");
             };
@@ -206,7 +212,7 @@ impl Lowerer<'_> {
                 "some formals are lacking a type"
             );
             let global = self.lower_lambda(
-                fn_.1,
+                Some(ident),
                 &formals
                     .iter()
                     .cloned()
@@ -214,10 +220,11 @@ impl Lowerer<'_> {
                     .collect::<Vec<_>>(),
                 rest.as_ref(),
                 expr,
-                fn_.0,
+                ty,
+                span,
                 &env,
             );
-            env.insert(fn_.1.value, global.into());
+            env.insert(ident.value, global.into());
         }
 
         for var_ in _vars {
@@ -225,23 +232,25 @@ impl Lowerer<'_> {
         }
 
         for e in exprs {
-            self.lower_expr(e, None, &env);
+            self.lower_expr(e, None, None, &env);
         }
         env
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn lower_lambda(
         &mut self,
-        name: &ast::Ident,
+        name: Option<&ast::Ident>,
         formals: &[(ast::Ident, Ty)],
         rest: Option<&ast::Ident>,
         body: &ast::Expr,
+        ty: Ty,
         span: Span,
         env: &PEnv,
     ) -> ast::Path {
         self.enter_body();
         let mut env = env.enter();
-        self.body_builder.start(span, body.ty_hint.unwrap());
+        self.body_builder.start(span, body.ty.unwrap());
 
         for (f, ty) in formals {
             let local = self.body_builder.alloc(f.span, *ty);
@@ -275,6 +284,7 @@ impl Lowerer<'_> {
         for (i, e) in exprs.into_iter().enumerate() {
             self.lower_expr(
                 e,
+                None,
                 if i == exprs_len - 1 {
                     Some(ir::Local::ret())
                 } else {
@@ -286,10 +296,14 @@ impl Lowerer<'_> {
 
         self.body_builder
             .terminate_block(ir::TerminatorKind::Return, span);
-        let lambda_name = self.lambda_name(name);
+        let lambda_name = match name {
+            Some(name) => self.lambda_name(name),
+            None => self.lambda_name_anonymous(span),
+        };
         self.finish_body(BodyData {
             span,
             name: lambda_name,
+            ty,
             param_count: formals.len() + if rest.is_some() { 1 } else { 0 },
             variable_count: 0,
         });
@@ -298,7 +312,13 @@ impl Lowerer<'_> {
         lambda_name
     }
 
-    fn lower_expr(&mut self, expr: &ast::Expr, local: Option<ir::Local>, env: &PEnv) -> ir::Local {
+    fn lower_expr(
+        &mut self,
+        expr: &ast::Expr,
+        name: Option<&ast::Ident>,
+        local: Option<ir::Local>,
+        env: &PEnv,
+    ) -> ir::Local {
         match &expr.kind {
             ast::ExprKind::Body(_) => panic!("should be handled somewhere else"),
             ast::ExprKind::Let { .. } => todo!(),
@@ -307,22 +327,38 @@ impl Lowerer<'_> {
                 cond,
                 r#true,
                 r#false,
-                expr.ty_hint.unwrap(),
+                expr.ty.unwrap(),
                 expr.span,
                 local,
                 env,
             ),
-            ast::ExprKind::Lambda { .. } => todo!(),
-            ast::ExprKind::List(l) => {
-                self.lower_list(l, expr.ty_hint.unwrap(), expr.span, local, env)
+            ast::ExprKind::Lambda {
+                formals,
+                rest,
+                formal_tys,
+                expr: body,
+            } => {
+                let path = self.lower_lambda(
+                    name,
+                    &formals
+                        .iter()
+                        .cloned()
+                        .zip(formal_tys.iter().copied())
+                        .collect::<Vec<_>>(),
+                    rest.as_ref(),
+                    body,
+                    expr.ty.unwrap(),
+                    expr.span,
+                    env,
+                );
+                let l = self.get_or_alloc_local(local, expr.span, expr.ty.unwrap());
+                self.body_builder.load_label(l, path, expr.span);
+                l
             }
+            ast::ExprKind::List(l) => self.lower_list(l, expr.ty.unwrap(), expr.span, local, env),
             ast::ExprKind::DottedList(_, _) => todo!(),
             ast::ExprKind::Boolean(b) => {
-                let l = self.get_or_alloc_local(
-                    local,
-                    expr.span,
-                    expr.ty_hint.unwrap_or(self.interner.builtins.types.none),
-                );
+                let l = self.get_or_alloc_local(local, expr.span, expr.ty.unwrap());
                 self.body_builder.load_i(
                     l,
                     ir::Constant::new(if *b { 1 } else { 0 }, expr.span),
@@ -331,21 +367,13 @@ impl Lowerer<'_> {
                 l
             }
             ast::ExprKind::Char(c) => {
-                let l = self.get_or_alloc_local(
-                    local,
-                    expr.span,
-                    expr.ty_hint.unwrap_or(self.interner.builtins.types.none),
-                );
+                let l = self.get_or_alloc_local(local, expr.span, expr.ty.unwrap());
                 self.body_builder
                     .load_i(l, ir::Constant::new(*c as u64, expr.span), expr.span);
                 l
             }
             ast::ExprKind::Number(n) => {
-                let l = self.get_or_alloc_local(
-                    local,
-                    expr.span,
-                    expr.ty_hint.unwrap_or(self.interner.builtins.types.none),
-                );
+                let l = self.get_or_alloc_local(local, expr.span, expr.ty.unwrap());
                 match n {
                     parser::Number::Fixnum(fx) => {
                         self.body_builder.load_i(
@@ -362,11 +390,7 @@ impl Lowerer<'_> {
                     panic!("undefined variable {:}", v.value)
                 };
 
-                let l = self.get_or_alloc_local(
-                    local,
-                    expr.span,
-                    expr.ty_hint.unwrap_or(self.interner.builtins.types.none),
-                );
+                let l = self.get_or_alloc_local(local, expr.span, expr.ty.unwrap());
 
                 match place {
                     Place::Local(loc) => {
@@ -397,7 +421,7 @@ impl Lowerer<'_> {
         env: &PEnv,
     ) -> ir::Local {
         let retl = self.get_or_alloc_local(local, span, ty);
-        let cl = self.lower_expr(cond, None, env);
+        let cl = self.lower_expr(cond, None, None, env);
         let cond_local = if self
             .body_builder
             .get_local(cl)
@@ -426,13 +450,13 @@ impl Lowerer<'_> {
             .body_builder
             .terminate_block(ir::TerminatorKind::default(), cond.span);
 
-        let tl = self.lower_expr(r#true, None, env);
+        let tl = self.lower_expr(r#true, None, None, env);
         self.body_builder.copy(retl, tl, r#true.span);
         let tidx = self
             .body_builder
             .terminate_block(ir::TerminatorKind::default(), r#true.span);
 
-        let fl = self.lower_expr(r#false, None, env);
+        let fl = self.lower_expr(r#false, None, None, env);
         self.body_builder.copy(retl, fl, r#false.span);
         let fidx = self
             .body_builder
@@ -468,11 +492,11 @@ impl Lowerer<'_> {
 
         let func = {
             let e = elems.next().expect("list must not be empty");
-            self.lower_expr(e, local, env)
+            self.lower_expr(e, None, local, env)
         };
 
         for e in elems {
-            let el = self.lower_expr(e, None, env);
+            let el = self.lower_expr(e, None, None, env);
             self.body_builder.arg(el, e.span);
         }
 
@@ -505,6 +529,15 @@ impl Lowerer<'_> {
                 .into()
             },
         }
+    }
+
+    fn lambda_name_anonymous(&mut self, span: Span) -> ast::Path {
+        let id = self.lambda_counter;
+        self.lambda_counter += 1;
+        self.lambda_name(&ast::Ident {
+            span,
+            value: format!("lambda{id}").into(),
+        })
     }
 
     fn enter_body(&mut self) {
@@ -542,6 +575,7 @@ struct BodyBuilder {
 struct BodyData {
     span: Span,
     name: ast::Path,
+    ty: Ty,
     param_count: usize,
     variable_count: usize,
 }
@@ -592,9 +626,11 @@ impl BodyBuilder {
         let body = ir::Body {
             span: data.span,
             name: data.name,
+            ty: data.ty,
             param_count: data.param_count,
             variable_count: data.variable_count,
             locals: std::mem::take(&mut self.locals),
+            instantiations: vec![],
             stack_size: 0,
             basic_blocks: std::mem::take(&mut self.bbs),
         };
@@ -661,194 +697,5 @@ impl BodyBuilder {
             span,
             kind: ir::StatementKind::CallLabel(dst, label),
         });
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use expect_test::{expect, Expect};
-
-    use crate::{interner::Interner, test::test_lower_str};
-
-    pub fn check(input: &str, expected: Expect) {
-        let mut interner = Interner::default();
-        let res = test_lower_str(input, &mut interner);
-        expected.assert_debug_eq(&res.display(&interner));
-    }
-
-    #[test]
-    fn boolean() {
-        check(
-            "#f",
-            expect![[r#"
-                (pkg
-                  (fn (|{|@init| (#script ()) 0:0..2}|) void (0:0..2)
-                    (let ([_0 void (0:0..2)]
-                          [_1 boolean (0:0..2)])
-                      (bb 0
-                        (loadI _1 0 (0:0..2))
-                        (return (0:0..2))))))
-            "#]],
-        );
-        check(
-            "#t",
-            expect![[r#"
-                (pkg
-                  (fn (|{|@init| (#script ()) 0:0..2}|) void (0:0..2)
-                    (let ([_0 void (0:0..2)]
-                          [_1 boolean (0:0..2)])
-                      (bb 0
-                        (loadI _1 1 (0:0..2))
-                        (return (0:0..2))))))
-            "#]],
-        );
-    }
-
-    #[test]
-    fn char() {
-        check(
-            r"#\a",
-            expect![[r#"
-                (pkg
-                  (fn (|{|@init| (#script ()) 0:0..3}|) void (0:0..3)
-                    (let ([_0 void (0:0..3)]
-                          [_1 char (0:0..3)])
-                      (bb 0
-                        (loadI _1 97 (0:0..3))
-                        (return (0:0..3))))))
-            "#]],
-        );
-        check(
-            r"#\λ",
-            expect![[r#"
-                (pkg
-                  (fn (|{|@init| (#script ()) 0:0..4}|) void (0:0..4)
-                    (let ([_0 void (0:0..4)]
-                          [_1 char (0:0..4)])
-                      (bb 0
-                        (loadI _1 955 (0:0..4))
-                        (return (0:0..4))))))
-            "#]],
-        );
-    }
-
-    mod numbers {
-        use super::*;
-
-        #[test]
-        fn integer() {
-            check(
-                "100",
-                expect![[r#"
-                    (pkg
-                      (fn (|{|@init| (#script ()) 0:0..3}|) void (0:0..3)
-                        (let ([_0 void (0:0..3)]
-                              [_1 i64 (0:0..3)])
-                          (bb 0
-                            (loadI _1 100 (0:0..3))
-                            (return (0:0..3))))))
-                "#]],
-            );
-        }
-    }
-
-    mod conditionals {
-        use super::*;
-
-        #[test]
-        fn simple_if() {
-            check(
-                "(if #t 1 2)",
-                expect![[r#"
-                    (pkg
-                      (fn (|{|@init| (#script ()) 0:0..11}|) void (0:0..11)
-                        (let ([_0 void (0:0..11)]
-                              [_1 i64 (0:0..11)]
-                              [_2 boolean (0:4..2)]
-                              [_3 i64 (0:7..1)]
-                              [_4 i64 (0:9..1)])
-                          (bb 0
-                            (loadI _2 1 (0:4..2))
-                            (cond _2 bb1 bb2 (0:4..2)))
-                          (bb 1
-                            (loadI _3 1 (0:7..1))
-                            (copy _1 _3 (0:7..1))
-                            (goto bb3 (0:7..1)))
-                          (bb 2
-                            (loadI _4 2 (0:9..1))
-                            (copy _1 _4 (0:9..1))
-                            (goto bb3 (0:9..1)))
-                          (bb 3
-                            (return (0:0..11))))))
-                "#]],
-            );
-        }
-    }
-
-    mod functions {
-        use super::*;
-
-        #[test]
-        fn identity_call() {
-            check(
-                "(define id (lambda (x) x))
-                 (id #t)",
-                expect![[r#"
-                    (pkg
-                      (fn (|{|id| (#script ()) 0:8..2}| [_1: '1]) '1 (0:0..26)
-                        (let ([_0 '1 (0:0..26)]
-                              [_1 '1 (0:20..1)])
-                          (bb 0
-                            (copy _0 _1 (0:23..1))
-                            (return (0:0..26)))))
-                      (fn (|{|@init| (#script ()) 0:0..51}|) void (0:0..51)
-                        (let ([_0 void (0:0..51)]
-                              [_1 boolean (0:44..7)]
-                              [_2 (-> '1 '1) (0:45..2)]
-                              [_3 boolean (0:48..2)])
-                          (bb 0
-                            (addressof _2 |{|id| (#script ()) 0:8..2}| (0:45..2))
-                            (loadI _3 1 (0:48..2))
-                            (arg _3 (0:48..2))
-                            (call _1 _2 (0:44..7))
-                            (return (0:0..51))))))
-                "#]],
-            );
-        }
-    }
-
-    mod module {
-        use super::*;
-
-        #[test]
-        fn identity_call() {
-            check(
-                "(module (id ()) (id)
-                   (import (rnrs expander core ()))
-                   (define id (lambda (x) x)))
-                 (import (id ()))
-                 (id #t)",
-                expect![[r#"
-                    (pkg
-                      (fn (|{|id| (id ()) 0:100..2}| [_1: '1]) '1 (0:92..26)
-                        (let ([_0 '1 (0:92..26)]
-                              [_1 '1 (0:112..1)])
-                          (bb 0
-                            (copy _0 _1 (0:115..1))
-                            (return (0:92..26)))))
-                      (fn (|{|@init| (#script ()) 0:0..178}|) void (0:0..178)
-                        (let ([_0 void (0:0..178)]
-                              [_1 boolean (0:171..7)]
-                              [_2 (-> '1 '1) (0:172..2)]
-                              [_3 boolean (0:175..2)])
-                          (bb 0
-                            (addressof _2 |{|id| (id ()) 0:100..2}| (0:172..2))
-                            (loadI _3 1 (0:175..2))
-                            (arg _3 (0:175..2))
-                            (call _1 _2 (0:171..7))
-                            (return (0:0..178))))))
-                "#]],
-            );
-        }
     }
 }

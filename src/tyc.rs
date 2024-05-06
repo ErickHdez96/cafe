@@ -69,8 +69,8 @@ impl TypeChecker<'_> {
                     tys.insert(d.name.value, self.new_var().into());
                     if let Some(e) = &mut d.expr {
                         let ty = self.expr(e, &mut tys);
-                        let ty = self.engine.substitute(ty, self.arena);
-                        let ty = generalize(ty, &tys, self.arena);
+                        let ty =
+                            generalize(self.engine.substitute(ty, self.arena), &tys, self.arena);
                         d.ty = Some(ty.clone());
                         if let Some(tys) = tys.get_immediate_mut(&d.name.value) {
                             *tys = ty;
@@ -80,6 +80,7 @@ impl TypeChecker<'_> {
                 }
                 ast::Item::Expr(e) => {
                     self.expr(e, &mut tys);
+                    self.engine.substitute_expr(e, self.arena);
                 }
             }
         }
@@ -204,7 +205,7 @@ impl TypeChecker<'_> {
             //}
             e => todo!("{e:#?}"),
         };
-        expr.ty_hint = Some(ty);
+        expr.ty = Some(ty);
         ty
     }
 
@@ -304,20 +305,21 @@ impl InferEngine {
         }
 
         match (arena.get(left.value()), arena.get(right.value())) {
-            // TODO: Check if right occurs in left
-            (_, TyK::Var(_)) => match self.substitutions.get(&right) {
+            (_, TyK::Var(_)) if !occurs(right, left, arena) => match self.substitutions.get(&right)
+            {
                 Some((ty, Constraint::Eq)) => self.unify(left, *ty, span, arena),
                 None => {
                     self.substitutions.insert(right, (left, Constraint::Eq));
                 }
             },
-            // TODO: Check if left occurs in right
-            (TyK::Var(_), _) => match self.substitutions.get(&left) {
-                Some((ty, Constraint::Eq)) => self.unify(*ty, right, span, arena),
-                None => {
-                    self.substitutions.insert(left, (right, Constraint::Eq));
+            (TyK::Var(_), _) if !occurs(left, right, arena) => {
+                match self.substitutions.get(&left) {
+                    Some((ty, Constraint::Eq)) => self.unify(*ty, right, span, arena),
+                    None => {
+                        self.substitutions.insert(left, (right, Constraint::Eq));
+                    }
                 }
-            },
+            }
             (
                 TyK::Lambda {
                     params: lparams,
@@ -336,7 +338,7 @@ impl InferEngine {
                 self.unify(*lret, *rret, span, arena);
             }
             (_, _) => panic!(
-                "unify: {:#?}, {:#?} - {span}",
+                "unify: {:#?} - {:#?} - {span}",
                 left.with_arena(arena),
                 right.with_arena(arena)
             ),
@@ -371,8 +373,8 @@ impl InferEngine {
         }
 
         fn visit_expr(expr: &mut ast::Expr, engine: &InferEngine, arena: &mut TyArena) {
-            if let Some(ty) = expr.ty_hint {
-                expr.ty_hint = Some(engine.substitute(ty, arena));
+            if let Some(ty) = expr.ty {
+                expr.ty = Some(engine.substitute(ty, arena));
             }
 
             match &mut expr.kind {
@@ -428,7 +430,10 @@ impl InferEngine {
                 for g in generics {
                     bounded.insert(*g);
                 }
-                let ty = self.do_substitute_tys(tyscheme, bounded, arena);
+                let ty = TyScheme::QTy(
+                    generics.clone(),
+                    Rc::new(self.do_substitute_tys(tyscheme, bounded, arena)),
+                );
                 for g in generics {
                     bounded.remove(g);
                 }
@@ -551,6 +556,30 @@ impl InferEngine {
                 c
             );
         }
+    }
+}
+
+fn occurs(needle: Ty, haystack: Ty, arena: &TyArena) -> bool {
+    let tyk = arena.get(haystack.value());
+    match tyk {
+        TyK::None
+        | TyK::Boolean
+        | TyK::Char
+        | TyK::Number(_)
+        | TyK::String
+        | TyK::Null
+        | TyK::Void
+        | TyK::Symbol
+        | TyK::Error => false,
+        TyK::Lambda {
+            params, rest, ret, ..
+        } => {
+            params.iter().any(|p| occurs(needle, *p, arena))
+                || rest.map(|r| occurs(needle, r, arena)).unwrap_or(false)
+                || occurs(needle, *ret, arena)
+        }
+        TyK::Var(_) => needle == haystack,
+        TyK::Array(haystack) => occurs(needle, *haystack, arena),
     }
 }
 

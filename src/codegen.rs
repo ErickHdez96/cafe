@@ -485,425 +485,425 @@ pub fn canonicalize_symbol(path: &ast::Path) -> Symbol {
     parent_path.join(" ").into()
 }
 
-#[cfg(test)]
-mod tests {
-    use crate::{asm::Inst, interner::Interner, test::test_codegen_str};
-    use expect_test::{expect, Expect};
-
-    fn check(input: &str, expected: Expect) {
-        let res = test_codegen_str(input, &mut Interner::default());
-        expected.assert_eq(
-            &res.into_iter()
-                .map(|Inst { span, value }| {
-                    if span.is_dummy() {
-                        value
-                    } else {
-                        format!("{value}; ({span})")
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join("\n"),
-        );
-    }
-
-    mod primitives {
-        use super::*;
-
-        #[test]
-        fn boolean() {
-            check(
-                "(define b (lambda () #f))",
-                expect![[r#"
-                    .align 4
-                    .global _T10_35_script1b
-                    _T10_35_script1b:
-                    	sub sp, sp, #16; (0:0..25)
-                    	stp x29, x30, [sp, #0]; (0:0..25)
-                    	add x29, sp, #0; (0:0..25)
-                    0:
-                    	mov x0, xzr; (0:21..2)
-                    	ldp x29, x30, [sp, #0]; (0:0..25)
-                    	add sp, sp, #16; (0:0..25)
-                    	ret x30; (0:0..25)"#]],
-            );
-
-            //check(
-            //    "(: b (-> boolean))
-            //     (define b (lambda () #t))",
-            //    expect![[r#"
-            //        .align 4
-            //        .global _T4root1b
-            //        _T4root1b:
-            //        	sub sp, sp, #16; (78..103)
-            //        	stp x29, x30, [sp, #0]; (78..103)
-            //        	add x29, sp, #0; (78..103)
-            //        0:
-            //        	mov w0, #1; (99..101)
-            //        	ldp x29, x30, [sp, #0]; (78..103)
-            //        	add sp, sp, #16; (78..103)
-            //        	ret x30; (99..101)"#]],
-            //);
-        }
-
-        //#[test]
-        //fn usize() {
-        //    check_intrinsics_expander(
-        //        "(: main (-> usize))
-        //         (define main (lambda () 100))",
-        //        expect![[r#"
-        //            .align 4
-        //            .global main
-        //            main:
-        //            	sub sp, sp, #16; (79..108)
-        //            	stp x29, x30, [sp, #0]; (79..108)
-        //            	add x29, sp, #0; (79..108)
-        //            0:
-        //            	mov x0, #100; (103..106)
-        //            	ldp x29, x30, [sp, #0]; (79..108)
-        //            	add sp, sp, #16; (79..108)
-        //            	ret x30; (103..106)"#]],
-        //    );
-        //}
-
-        //#[test]
-        //fn char() {
-        //    check_intrinsics_expander(
-        //        r"(: c (-> char))
-        //          (define c (lambda () #\a))",
-        //        expect![[r#"
-        //            .align 4
-        //            .global _T4root1c
-        //            _T4root1c:
-        //            	sub sp, sp, #16; (76..102)
-        //            	stp x29, x30, [sp, #0]; (76..102)
-        //            	add x29, sp, #0; (76..102)
-        //            0:
-        //            	mov w0, #97; (97..100)
-        //            	ldp x29, x30, [sp, #0]; (76..102)
-        //            	add sp, sp, #16; (76..102)
-        //            	ret x30; (97..100)"#]],
-        //    );
-        //}
-    }
-
-    //mod parameters {
-    //    use super::*;
-
-    //    #[test]
-    //    fn simple_parameter() {
-    //        check_intrinsics_expander(
-    //            "(: idb (-> boolean boolean))
-    //             (define idb (lambda (b) b))",
-    //            expect![[r#"
-    //                .align 4
-    //                .global _T4root3idb
-    //                _T4root3idb:
-    //                	sub sp, sp, #32; (88..115)
-    //                	stp x29, x30, [sp, #16]; (88..115)
-    //                	add x29, sp, #16; (88..115)
-    //                	strb w0, [sp, #15]; (88..115)
-    //                0:
-    //                	ldrb w0, [sp, #15]; (112..113)
-    //                	ldp x29, x30, [sp, #16]; (88..115)
-    //                	add sp, sp, #32; (88..115)
-    //                	ret x30; (112..113)"#]],
-    //        );
-    //    }
-
-    //    #[test]
-    //    fn first_parameter() {
-    //        check_intrinsics_expander(
-    //            "(: first (-> usize boolean usize))
-    //             (define first (lambda (u b) u))",
-    //            expect![[r#"
-    //                .align 4
-    //                .global _T4root5first
-    //                _T4root5first:
-    //                	sub sp, sp, #32; (94..125)
-    //                	stp x29, x30, [sp, #16]; (94..125)
-    //                	add x29, sp, #16; (94..125)
-    //                	str x0, [sp, #8]; (94..125)
-    //                	strb w1, [sp, #7]; (94..125)
-    //                0:
-    //                	ldr x0, [sp, #8]; (122..123)
-    //                	ldp x29, x30, [sp, #16]; (94..125)
-    //                	add sp, sp, #32; (94..125)
-    //                	ret x30; (122..123)"#]],
-    //        );
-    //    }
-
-    //    #[test]
-    //    fn second_parameter() {
-    //        check_intrinsics_expander(
-    //            "(: second (-> usize boolean boolean))
-    //             (define second (lambda (u b) b))",
-    //            expect![[r#"
-    //                .align 4
-    //                .global _T4root6second
-    //                _T4root6second:
-    //                	sub sp, sp, #32; (97..129)
-    //                	stp x29, x30, [sp, #16]; (97..129)
-    //                	add x29, sp, #16; (97..129)
-    //                	str x0, [sp, #8]; (97..129)
-    //                	strb w1, [sp, #7]; (97..129)
-    //                0:
-    //                	ldrb w0, [sp, #7]; (126..127)
-    //                	ldp x29, x30, [sp, #16]; (97..129)
-    //                	add sp, sp, #32; (97..129)
-    //                	ret x30; (126..127)"#]],
-    //        );
-    //    }
-    //}
-
-    //mod primitive_fns {
-    //    use super::*;
-
-    //    #[test]
-    //    fn add() {
-    //        check_intrinsics(
-    //            "(: main (-> usize))
-    //             (define (main) (+ 4 10))",
-    //            expect![[r#"
-    //                .align 4
-    //                .global main
-    //                main:
-    //                	sub sp, sp, #32; (283..307)
-    //                	stp x29, x30, [sp, #16]; (283..307)
-    //                	add x29, sp, #16; (283..307)
-    //                0:
-    //                	mov x8, #4; (301..302)
-    //                	str x8, [sp, #8]; (301..302)
-    //                	mov x8, #10; (303..305)
-    //                	str x8, [sp, #0]; (303..305)
-    //                	ldr x8, [sp, #8]; (298..306)
-    //                	ldr x9, [sp, #0]; (298..306)
-    //                	add x0, x8, x9; (298..306)
-    //                	ldp x29, x30, [sp, #16]; (283..307)
-    //                	add sp, sp, #32; (283..307)
-    //                	ret x30; (298..306)"#]],
-    //        );
-    //    }
-
-    //    #[test]
-    //    fn write_char() {
-    //        check_io(
-    //            r"(: main (-> ()))
-    //              (define (main) (write-char #\λ))",
-    //            expect![[r#"
-    //                .align 4
-    //                .global main
-    //                main:
-    //                	sub sp, sp, #32; (231..264)
-    //                	stp x29, x30, [sp, #16]; (231..264)
-    //                	add x29, sp, #16; (231..264)
-    //                0:
-    //                	mov w8, #955; (258..262)
-    //                	str w8, [sp, #12]; (258..262)
-    //                	ldr w0, [sp, #12]; (258..262)
-    //                	bl _T4rnrs5typed10intrinsics2io10write_char; (246..263)
-    //                	ldp x29, x30, [sp, #16]; (231..264)
-    //                	add sp, sp, #32; (231..264)
-    //                	ret x30; (246..263)"#]],
-    //        );
-
-    //        check_io(
-    //            r"(: main (-> ()))
-    //              (define (main) (write-char #\𝇍))",
-    //            expect![[r#"
-    //                .align 4
-    //                .global main
-    //                main:
-    //                	sub sp, sp, #32; (231..266)
-    //                	stp x29, x30, [sp, #16]; (231..266)
-    //                	add x29, sp, #16; (231..266)
-    //                0:
-    //                	mov w8, #53709; (258..264)
-    //                	movk w8, #1, lsl #16; (258..264)
-    //                	str w8, [sp, #12]; (258..264)
-    //                	ldr w0, [sp, #12]; (258..264)
-    //                	bl _T4rnrs5typed10intrinsics2io10write_char; (246..265)
-    //                	ldp x29, x30, [sp, #16]; (231..266)
-    //                	add sp, sp, #32; (231..266)
-    //                	ret x30; (246..265)"#]],
-    //        );
-    //    }
-    //}
-
-    //mod fns {
-    //    use super::*;
-
-    //    #[test]
-    //    fn unit_fn() {
-    //        check_intrinsics_expander(
-    //            "(: u (-> ()))
-    //             (define (u) '())
-    //             (: main (-> ()))
-    //             (define (main) (u) (u))",
-    //            expect![[r#"
-    //                .align 4
-    //                .global _T4root1u
-    //                _T4root1u:
-    //                	sub sp, sp, #16; (73..89)
-    //                	stp x29, x30, [sp, #0]; (73..89)
-    //                	add x29, sp, #0; (73..89)
-    //                0:
-    //                	ldp x29, x30, [sp, #0]; (73..89)
-    //                	add sp, sp, #16; (73..89)
-    //                	ret x30; (85..88)
-    //                .align 4
-    //                .global main
-    //                main:
-    //                	sub sp, sp, #16; (141..164)
-    //                	stp x29, x30, [sp, #0]; (141..164)
-    //                	add x29, sp, #0; (141..164)
-    //                0:
-    //                	bl _T4root1u; (156..159)
-    //                	bl _T4root1u; (160..163)
-    //                	ldp x29, x30, [sp, #0]; (141..164)
-    //                	add sp, sp, #16; (141..164)
-    //                	ret x30; (156..163)"#]],
-    //        );
-    //    }
-
-    //    #[test]
-    //    fn fn_as_param() {
-    //        check_intrinsics(
-    //            "(: call (-> (-> usize usize usize) usize usize usize))
-    //             (define (call fn x y)
-    //               (fn x y))
-    //             (: main (-> usize))
-    //             (define (main)
-    //               (call + 4 5))",
-    //            expect![[r#"
-    //                .align 4
-    //                .global _T4root4call
-    //                _T4root4call:
-    //                	sub sp, sp, #64; (318..368)
-    //                	stp x29, x30, [sp, #48]; (318..368)
-    //                	add x29, sp, #48; (318..368)
-    //                	str x0, [sp, #40]; (318..368)
-    //                	str x1, [sp, #32]; (318..368)
-    //                	str x2, [sp, #24]; (318..368)
-    //                0:
-    //                	ldr x8, [sp, #32]; (363..364)
-    //                	str x8, [sp, #16]; (363..364)
-    //                	ldr x8, [sp, #24]; (365..366)
-    //                	str x8, [sp, #8]; (365..366)
-    //                	ldr x0, [sp, #16]; (363..364)
-    //                	ldr x1, [sp, #8]; (365..366)
-    //                	ldr x8, [sp, #40]; (359..367)
-    //                	blr x8; (359..367)
-    //                	ldp x29, x30, [sp, #48]; (318..368)
-    //                	add sp, sp, #64; (318..368)
-    //                	ret x30; (359..367)
-    //                .align 4
-    //                .global main
-    //                main:
-    //                	sub sp, sp, #48; (423..470)
-    //                	stp x29, x30, [sp, #32]; (423..470)
-    //                	add x29, sp, #32; (423..470)
-    //                0:
-    //                	adrp x8, _T4rnrs5typed10intrinsics3fns3add@PAGE; (463..464)
-    //                	add x8, x8, _T4rnrs5typed10intrinsics3fns3add@PAGEOFF; (463..464)
-    //                	str x8, [sp, #24]; (463..464)
-    //                	mov x8, #4; (465..466)
-    //                	str x8, [sp, #16]; (465..466)
-    //                	mov x8, #5; (467..468)
-    //                	str x8, [sp, #8]; (467..468)
-    //                	ldr x0, [sp, #24]; (463..464)
-    //                	ldr x1, [sp, #16]; (465..466)
-    //                	ldr x2, [sp, #8]; (467..468)
-    //                	bl _T4root4call; (457..469)
-    //                	ldp x29, x30, [sp, #32]; (423..470)
-    //                	add sp, sp, #48; (423..470)
-    //                	ret x30; (457..469)"#]],
-    //        );
-    //    }
-
-    //    #[test]
-    //    fn call_inside_call() {
-    //        check_intrinsics(
-    //            "(: id (-> usize usize))
-    //             (define (id u) u)
-    //             (: main (-> usize))
-    //             (define (main) (+ (id 1) (id 2)))",
-    //            expect![[r#"
-    //                .align 4
-    //                .global _T4root2id
-    //                _T4root2id:
-    //                	sub sp, sp, #32; (287..304)
-    //                	stp x29, x30, [sp, #16]; (287..304)
-    //                	add x29, sp, #16; (287..304)
-    //                	str x0, [sp, #8]; (287..304)
-    //                0:
-    //                	ldr x0, [sp, #8]; (302..303)
-    //                	ldp x29, x30, [sp, #16]; (287..304)
-    //                	add sp, sp, #32; (287..304)
-    //                	ret x30; (302..303)
-    //                .align 4
-    //                .global main
-    //                main:
-    //                	sub sp, sp, #48; (359..392)
-    //                	stp x29, x30, [sp, #32]; (359..392)
-    //                	add x29, sp, #32; (359..392)
-    //                0:
-    //                	mov x8, #1; (381..382)
-    //                	str x8, [sp, #16]; (381..382)
-    //                	ldr x0, [sp, #16]; (381..382)
-    //                	bl _T4root2id; (377..383)
-    //                	mov x8, x0; (377..383)
-    //                	str x8, [sp, #24]; (377..383)
-    //                	mov x8, #2; (388..389)
-    //                	str x8, [sp, #0]; (388..389)
-    //                	ldr x0, [sp, #0]; (388..389)
-    //                	bl _T4root2id; (384..390)
-    //                	mov x8, x0; (384..390)
-    //                	str x8, [sp, #8]; (384..390)
-    //                	ldr x8, [sp, #24]; (374..391)
-    //                	ldr x9, [sp, #8]; (374..391)
-    //                	add x0, x8, x9; (374..391)
-    //                	ldp x29, x30, [sp, #32]; (359..392)
-    //                	add sp, sp, #48; (359..392)
-    //                	ret x30; (374..391)"#]],
-    //        );
-    //    }
-    //}
-
-    //mod ifs {
-    //    use super::*;
-
-    //    #[test]
-    //    fn simple() {
-    //        check_intrinsics_expander(
-    //            "(: choose (-> boolean usize usize usize))
-    //             (define (choose cond true false)
-    //               (if cond true false))",
-    //            expect![[r#"
-    //                .align 4
-    //                .global _T4root6choose
-    //                _T4root6choose:
-    //                	sub sp, sp, #48; (101..174)
-    //                	stp x29, x30, [sp, #32]; (101..174)
-    //                	add x29, sp, #32; (101..174)
-    //                	strb w0, [sp, #31]; (101..174)
-    //                	str x1, [sp, #16]; (101..174)
-    //                	str x2, [sp, #8]; (101..174)
-    //                0:
-    //                	ldrb w8, [sp, #31]; (157..161)
-    //                	cmp w8, #0; (157..161)
-    //                	b.NE 1f; (157..161)
-    //                	b 2f; (157..161)
-    //                1:
-    //                	ldr x0, [sp, #16]; (162..166)
-    //                	b 3f; (157..161)
-    //                2:
-    //                	ldr x0, [sp, #8]; (167..172)
-    //                	b 3f; (157..161)
-    //                3:
-    //                	ldp x29, x30, [sp, #32]; (101..174)
-    //                	add sp, sp, #48; (101..174)
-    //                	ret x30; (153..173)"#]],
-    //        );
-    //    }
-    //}
-}
+//#[cfg(test)]
+//mod tests {
+//    use crate::{asm::Inst, interner::Interner, test::test_codegen_str};
+//    use expect_test::{expect, Expect};
+//
+//    fn check(input: &str, expected: Expect) {
+//        let res = test_codegen_str(input, &mut Interner::default());
+//        expected.assert_eq(
+//            &res.into_iter()
+//                .map(|Inst { span, value }| {
+//                    if span.is_dummy() {
+//                        value
+//                    } else {
+//                        format!("{value}; ({span})")
+//                    }
+//                })
+//                .collect::<Vec<_>>()
+//                .join("\n"),
+//        );
+//    }
+//
+//    mod primitives {
+//        use super::*;
+//
+//        #[test]
+//        fn boolean() {
+//            check(
+//                "(define b (lambda () #f))",
+//                expect![[r#"
+//                    .align 4
+//                    .global _T10_35_script1b
+//                    _T10_35_script1b:
+//                    	sub sp, sp, #16; (0:0..25)
+//                    	stp x29, x30, [sp, #0]; (0:0..25)
+//                    	add x29, sp, #0; (0:0..25)
+//                    0:
+//                    	mov x0, xzr; (0:21..2)
+//                    	ldp x29, x30, [sp, #0]; (0:0..25)
+//                    	add sp, sp, #16; (0:0..25)
+//                    	ret x30; (0:0..25)"#]],
+//            );
+//
+//            //check(
+//            //    "(: b (-> boolean))
+//            //     (define b (lambda () #t))",
+//            //    expect![[r#"
+//            //        .align 4
+//            //        .global _T4root1b
+//            //        _T4root1b:
+//            //        	sub sp, sp, #16; (78..103)
+//            //        	stp x29, x30, [sp, #0]; (78..103)
+//            //        	add x29, sp, #0; (78..103)
+//            //        0:
+//            //        	mov w0, #1; (99..101)
+//            //        	ldp x29, x30, [sp, #0]; (78..103)
+//            //        	add sp, sp, #16; (78..103)
+//            //        	ret x30; (99..101)"#]],
+//            //);
+//        }
+//
+//        //#[test]
+//        //fn usize() {
+//        //    check_intrinsics_expander(
+//        //        "(: main (-> usize))
+//        //         (define main (lambda () 100))",
+//        //        expect![[r#"
+//        //            .align 4
+//        //            .global main
+//        //            main:
+//        //            	sub sp, sp, #16; (79..108)
+//        //            	stp x29, x30, [sp, #0]; (79..108)
+//        //            	add x29, sp, #0; (79..108)
+//        //            0:
+//        //            	mov x0, #100; (103..106)
+//        //            	ldp x29, x30, [sp, #0]; (79..108)
+//        //            	add sp, sp, #16; (79..108)
+//        //            	ret x30; (103..106)"#]],
+//        //    );
+//        //}
+//
+//        //#[test]
+//        //fn char() {
+//        //    check_intrinsics_expander(
+//        //        r"(: c (-> char))
+//        //          (define c (lambda () #\a))",
+//        //        expect![[r#"
+//        //            .align 4
+//        //            .global _T4root1c
+//        //            _T4root1c:
+//        //            	sub sp, sp, #16; (76..102)
+//        //            	stp x29, x30, [sp, #0]; (76..102)
+//        //            	add x29, sp, #0; (76..102)
+//        //            0:
+//        //            	mov w0, #97; (97..100)
+//        //            	ldp x29, x30, [sp, #0]; (76..102)
+//        //            	add sp, sp, #16; (76..102)
+//        //            	ret x30; (97..100)"#]],
+//        //    );
+//        //}
+//    }
+//
+//    //mod parameters {
+//    //    use super::*;
+//
+//    //    #[test]
+//    //    fn simple_parameter() {
+//    //        check_intrinsics_expander(
+//    //            "(: idb (-> boolean boolean))
+//    //             (define idb (lambda (b) b))",
+//    //            expect![[r#"
+//    //                .align 4
+//    //                .global _T4root3idb
+//    //                _T4root3idb:
+//    //                	sub sp, sp, #32; (88..115)
+//    //                	stp x29, x30, [sp, #16]; (88..115)
+//    //                	add x29, sp, #16; (88..115)
+//    //                	strb w0, [sp, #15]; (88..115)
+//    //                0:
+//    //                	ldrb w0, [sp, #15]; (112..113)
+//    //                	ldp x29, x30, [sp, #16]; (88..115)
+//    //                	add sp, sp, #32; (88..115)
+//    //                	ret x30; (112..113)"#]],
+//    //        );
+//    //    }
+//
+//    //    #[test]
+//    //    fn first_parameter() {
+//    //        check_intrinsics_expander(
+//    //            "(: first (-> usize boolean usize))
+//    //             (define first (lambda (u b) u))",
+//    //            expect![[r#"
+//    //                .align 4
+//    //                .global _T4root5first
+//    //                _T4root5first:
+//    //                	sub sp, sp, #32; (94..125)
+//    //                	stp x29, x30, [sp, #16]; (94..125)
+//    //                	add x29, sp, #16; (94..125)
+//    //                	str x0, [sp, #8]; (94..125)
+//    //                	strb w1, [sp, #7]; (94..125)
+//    //                0:
+//    //                	ldr x0, [sp, #8]; (122..123)
+//    //                	ldp x29, x30, [sp, #16]; (94..125)
+//    //                	add sp, sp, #32; (94..125)
+//    //                	ret x30; (122..123)"#]],
+//    //        );
+//    //    }
+//
+//    //    #[test]
+//    //    fn second_parameter() {
+//    //        check_intrinsics_expander(
+//    //            "(: second (-> usize boolean boolean))
+//    //             (define second (lambda (u b) b))",
+//    //            expect![[r#"
+//    //                .align 4
+//    //                .global _T4root6second
+//    //                _T4root6second:
+//    //                	sub sp, sp, #32; (97..129)
+//    //                	stp x29, x30, [sp, #16]; (97..129)
+//    //                	add x29, sp, #16; (97..129)
+//    //                	str x0, [sp, #8]; (97..129)
+//    //                	strb w1, [sp, #7]; (97..129)
+//    //                0:
+//    //                	ldrb w0, [sp, #7]; (126..127)
+//    //                	ldp x29, x30, [sp, #16]; (97..129)
+//    //                	add sp, sp, #32; (97..129)
+//    //                	ret x30; (126..127)"#]],
+//    //        );
+//    //    }
+//    //}
+//
+//    //mod primitive_fns {
+//    //    use super::*;
+//
+//    //    #[test]
+//    //    fn add() {
+//    //        check_intrinsics(
+//    //            "(: main (-> usize))
+//    //             (define (main) (+ 4 10))",
+//    //            expect![[r#"
+//    //                .align 4
+//    //                .global main
+//    //                main:
+//    //                	sub sp, sp, #32; (283..307)
+//    //                	stp x29, x30, [sp, #16]; (283..307)
+//    //                	add x29, sp, #16; (283..307)
+//    //                0:
+//    //                	mov x8, #4; (301..302)
+//    //                	str x8, [sp, #8]; (301..302)
+//    //                	mov x8, #10; (303..305)
+//    //                	str x8, [sp, #0]; (303..305)
+//    //                	ldr x8, [sp, #8]; (298..306)
+//    //                	ldr x9, [sp, #0]; (298..306)
+//    //                	add x0, x8, x9; (298..306)
+//    //                	ldp x29, x30, [sp, #16]; (283..307)
+//    //                	add sp, sp, #32; (283..307)
+//    //                	ret x30; (298..306)"#]],
+//    //        );
+//    //    }
+//
+//    //    #[test]
+//    //    fn write_char() {
+//    //        check_io(
+//    //            r"(: main (-> ()))
+//    //              (define (main) (write-char #\λ))",
+//    //            expect![[r#"
+//    //                .align 4
+//    //                .global main
+//    //                main:
+//    //                	sub sp, sp, #32; (231..264)
+//    //                	stp x29, x30, [sp, #16]; (231..264)
+//    //                	add x29, sp, #16; (231..264)
+//    //                0:
+//    //                	mov w8, #955; (258..262)
+//    //                	str w8, [sp, #12]; (258..262)
+//    //                	ldr w0, [sp, #12]; (258..262)
+//    //                	bl _T4rnrs5typed10intrinsics2io10write_char; (246..263)
+//    //                	ldp x29, x30, [sp, #16]; (231..264)
+//    //                	add sp, sp, #32; (231..264)
+//    //                	ret x30; (246..263)"#]],
+//    //        );
+//
+//    //        check_io(
+//    //            r"(: main (-> ()))
+//    //              (define (main) (write-char #\𝇍))",
+//    //            expect![[r#"
+//    //                .align 4
+//    //                .global main
+//    //                main:
+//    //                	sub sp, sp, #32; (231..266)
+//    //                	stp x29, x30, [sp, #16]; (231..266)
+//    //                	add x29, sp, #16; (231..266)
+//    //                0:
+//    //                	mov w8, #53709; (258..264)
+//    //                	movk w8, #1, lsl #16; (258..264)
+//    //                	str w8, [sp, #12]; (258..264)
+//    //                	ldr w0, [sp, #12]; (258..264)
+//    //                	bl _T4rnrs5typed10intrinsics2io10write_char; (246..265)
+//    //                	ldp x29, x30, [sp, #16]; (231..266)
+//    //                	add sp, sp, #32; (231..266)
+//    //                	ret x30; (246..265)"#]],
+//    //        );
+//    //    }
+//    //}
+//
+//    //mod fns {
+//    //    use super::*;
+//
+//    //    #[test]
+//    //    fn unit_fn() {
+//    //        check_intrinsics_expander(
+//    //            "(: u (-> ()))
+//    //             (define (u) '())
+//    //             (: main (-> ()))
+//    //             (define (main) (u) (u))",
+//    //            expect![[r#"
+//    //                .align 4
+//    //                .global _T4root1u
+//    //                _T4root1u:
+//    //                	sub sp, sp, #16; (73..89)
+//    //                	stp x29, x30, [sp, #0]; (73..89)
+//    //                	add x29, sp, #0; (73..89)
+//    //                0:
+//    //                	ldp x29, x30, [sp, #0]; (73..89)
+//    //                	add sp, sp, #16; (73..89)
+//    //                	ret x30; (85..88)
+//    //                .align 4
+//    //                .global main
+//    //                main:
+//    //                	sub sp, sp, #16; (141..164)
+//    //                	stp x29, x30, [sp, #0]; (141..164)
+//    //                	add x29, sp, #0; (141..164)
+//    //                0:
+//    //                	bl _T4root1u; (156..159)
+//    //                	bl _T4root1u; (160..163)
+//    //                	ldp x29, x30, [sp, #0]; (141..164)
+//    //                	add sp, sp, #16; (141..164)
+//    //                	ret x30; (156..163)"#]],
+//    //        );
+//    //    }
+//
+//    //    #[test]
+//    //    fn fn_as_param() {
+//    //        check_intrinsics(
+//    //            "(: call (-> (-> usize usize usize) usize usize usize))
+//    //             (define (call fn x y)
+//    //               (fn x y))
+//    //             (: main (-> usize))
+//    //             (define (main)
+//    //               (call + 4 5))",
+//    //            expect![[r#"
+//    //                .align 4
+//    //                .global _T4root4call
+//    //                _T4root4call:
+//    //                	sub sp, sp, #64; (318..368)
+//    //                	stp x29, x30, [sp, #48]; (318..368)
+//    //                	add x29, sp, #48; (318..368)
+//    //                	str x0, [sp, #40]; (318..368)
+//    //                	str x1, [sp, #32]; (318..368)
+//    //                	str x2, [sp, #24]; (318..368)
+//    //                0:
+//    //                	ldr x8, [sp, #32]; (363..364)
+//    //                	str x8, [sp, #16]; (363..364)
+//    //                	ldr x8, [sp, #24]; (365..366)
+//    //                	str x8, [sp, #8]; (365..366)
+//    //                	ldr x0, [sp, #16]; (363..364)
+//    //                	ldr x1, [sp, #8]; (365..366)
+//    //                	ldr x8, [sp, #40]; (359..367)
+//    //                	blr x8; (359..367)
+//    //                	ldp x29, x30, [sp, #48]; (318..368)
+//    //                	add sp, sp, #64; (318..368)
+//    //                	ret x30; (359..367)
+//    //                .align 4
+//    //                .global main
+//    //                main:
+//    //                	sub sp, sp, #48; (423..470)
+//    //                	stp x29, x30, [sp, #32]; (423..470)
+//    //                	add x29, sp, #32; (423..470)
+//    //                0:
+//    //                	adrp x8, _T4rnrs5typed10intrinsics3fns3add@PAGE; (463..464)
+//    //                	add x8, x8, _T4rnrs5typed10intrinsics3fns3add@PAGEOFF; (463..464)
+//    //                	str x8, [sp, #24]; (463..464)
+//    //                	mov x8, #4; (465..466)
+//    //                	str x8, [sp, #16]; (465..466)
+//    //                	mov x8, #5; (467..468)
+//    //                	str x8, [sp, #8]; (467..468)
+//    //                	ldr x0, [sp, #24]; (463..464)
+//    //                	ldr x1, [sp, #16]; (465..466)
+//    //                	ldr x2, [sp, #8]; (467..468)
+//    //                	bl _T4root4call; (457..469)
+//    //                	ldp x29, x30, [sp, #32]; (423..470)
+//    //                	add sp, sp, #48; (423..470)
+//    //                	ret x30; (457..469)"#]],
+//    //        );
+//    //    }
+//
+//    //    #[test]
+//    //    fn call_inside_call() {
+//    //        check_intrinsics(
+//    //            "(: id (-> usize usize))
+//    //             (define (id u) u)
+//    //             (: main (-> usize))
+//    //             (define (main) (+ (id 1) (id 2)))",
+//    //            expect![[r#"
+//    //                .align 4
+//    //                .global _T4root2id
+//    //                _T4root2id:
+//    //                	sub sp, sp, #32; (287..304)
+//    //                	stp x29, x30, [sp, #16]; (287..304)
+//    //                	add x29, sp, #16; (287..304)
+//    //                	str x0, [sp, #8]; (287..304)
+//    //                0:
+//    //                	ldr x0, [sp, #8]; (302..303)
+//    //                	ldp x29, x30, [sp, #16]; (287..304)
+//    //                	add sp, sp, #32; (287..304)
+//    //                	ret x30; (302..303)
+//    //                .align 4
+//    //                .global main
+//    //                main:
+//    //                	sub sp, sp, #48; (359..392)
+//    //                	stp x29, x30, [sp, #32]; (359..392)
+//    //                	add x29, sp, #32; (359..392)
+//    //                0:
+//    //                	mov x8, #1; (381..382)
+//    //                	str x8, [sp, #16]; (381..382)
+//    //                	ldr x0, [sp, #16]; (381..382)
+//    //                	bl _T4root2id; (377..383)
+//    //                	mov x8, x0; (377..383)
+//    //                	str x8, [sp, #24]; (377..383)
+//    //                	mov x8, #2; (388..389)
+//    //                	str x8, [sp, #0]; (388..389)
+//    //                	ldr x0, [sp, #0]; (388..389)
+//    //                	bl _T4root2id; (384..390)
+//    //                	mov x8, x0; (384..390)
+//    //                	str x8, [sp, #8]; (384..390)
+//    //                	ldr x8, [sp, #24]; (374..391)
+//    //                	ldr x9, [sp, #8]; (374..391)
+//    //                	add x0, x8, x9; (374..391)
+//    //                	ldp x29, x30, [sp, #32]; (359..392)
+//    //                	add sp, sp, #48; (359..392)
+//    //                	ret x30; (374..391)"#]],
+//    //        );
+//    //    }
+//    //}
+//
+//    //mod ifs {
+//    //    use super::*;
+//
+//    //    #[test]
+//    //    fn simple() {
+//    //        check_intrinsics_expander(
+//    //            "(: choose (-> boolean usize usize usize))
+//    //             (define (choose cond true false)
+//    //               (if cond true false))",
+//    //            expect![[r#"
+//    //                .align 4
+//    //                .global _T4root6choose
+//    //                _T4root6choose:
+//    //                	sub sp, sp, #48; (101..174)
+//    //                	stp x29, x30, [sp, #32]; (101..174)
+//    //                	add x29, sp, #32; (101..174)
+//    //                	strb w0, [sp, #31]; (101..174)
+//    //                	str x1, [sp, #16]; (101..174)
+//    //                	str x2, [sp, #8]; (101..174)
+//    //                0:
+//    //                	ldrb w8, [sp, #31]; (157..161)
+//    //                	cmp w8, #0; (157..161)
+//    //                	b.NE 1f; (157..161)
+//    //                	b 2f; (157..161)
+//    //                1:
+//    //                	ldr x0, [sp, #16]; (162..166)
+//    //                	b 3f; (157..161)
+//    //                2:
+//    //                	ldr x0, [sp, #8]; (167..172)
+//    //                	b 3f; (157..161)
+//    //                3:
+//    //                	ldp x29, x30, [sp, #32]; (101..174)
+//    //                	add sp, sp, #48; (101..174)
+//    //                	ret x30; (153..173)"#]],
+//    //        );
+//    //    }
+//    //}
+//}

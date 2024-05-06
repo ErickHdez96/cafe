@@ -167,52 +167,52 @@ where
         self.bindings.insert(k, v);
     }
 
-    pub fn has_immediate<Q: ?Sized>(&self, k: &Q) -> bool
+    pub fn has_immediate<Q>(&self, k: &Q) -> bool
     where
         K: Borrow<Q>,
-        Q: Hash + Eq,
+        Q: Hash + Eq + ?Sized,
     {
         self.bindings.contains_key(k)
     }
 
-    pub fn get<Q: ?Sized>(&self, k: &Q) -> Option<&V>
+    pub fn get<Q>(&self, k: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
-        Q: Hash + Eq,
+        Q: Hash + Eq + ?Sized,
     {
         self.bindings
             .get(k)
             .or_else(|| self.parent.as_ref().and_then(|p| p.get(k)))
     }
 
-    pub fn get_immediate<Q: ?Sized>(&self, k: &Q) -> Option<&V>
+    pub fn get_immediate<Q>(&self, k: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
-        Q: Hash + Eq,
+        Q: Hash + Eq + ?Sized,
     {
         self.bindings.get(k)
     }
 
-    pub fn get_immediate_mut<Q: ?Sized>(&mut self, k: &Q) -> Option<&mut V>
+    pub fn get_immediate_mut<Q>(&mut self, k: &Q) -> Option<&mut V>
     where
         K: Borrow<Q>,
-        Q: Hash + Eq,
+        Q: Hash + Eq + ?Sized,
     {
         self.bindings.get_mut(k)
     }
 
-    pub fn remove_immediate<Q: ?Sized>(&mut self, k: &Q) -> Option<V>
+    pub fn remove_immediate<Q>(&mut self, k: &Q) -> Option<V>
     where
         K: Borrow<Q>,
-        Q: Hash + Eq,
+        Q: Hash + Eq + ?Sized,
     {
         self.bindings.remove(k)
     }
 
-    pub fn get_all<Q: ?Sized>(&self, k: &Q) -> Vec<&V>
+    pub fn get_all<Q>(&self, k: &Q) -> Vec<&V>
     where
         K: Borrow<Q>,
-        Q: Hash + Eq,
+        Q: Hash + Eq + ?Sized,
     {
         let mut bindings = vec![];
         let mut c = Some(self);

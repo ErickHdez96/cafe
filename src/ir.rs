@@ -63,6 +63,8 @@ impl fmt::Debug for PackageDisplay<'_> {
 pub struct Body {
     pub span: Span,
     pub name: Path,
+    pub ty: Ty,
+    pub instantiations: Vec<Vec<Ty>>,
     pub param_count: usize,
     pub variable_count: usize,
     pub locals: Vec<LocalDecl>,

@@ -88,5 +88,5 @@ impl SourceFile {
 
 thread_local! {
     // FILE_ID 0 is invalid
-    static FILE_ID: Cell<u16> = Cell::new(1);
+    static FILE_ID: Cell<u16> = const { Cell::new(1) };
 }

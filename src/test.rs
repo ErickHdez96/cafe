@@ -2,7 +2,7 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use crate::{
     asm,
-    //codegen::codegen,
+    codegen::codegen,
     diagnostics::Diagnostic,
     env::Env,
     expander::{
@@ -130,9 +130,9 @@ pub fn test_lower_str(input: &str, interner: &mut Interner) -> ir::Package {
     }
 }
 
+#[allow(dead_code)]
 pub fn test_codegen_str(input: &str, interner: &mut Interner) -> Vec<asm::Inst> {
-    todo!()
-    //codegen(test_lower_str(input, interner), &mut interner.types)
+    codegen(test_lower_str(input, interner), &mut interner.types)
 }
 
 pub struct Libs {

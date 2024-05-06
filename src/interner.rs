@@ -27,15 +27,24 @@ pub struct Builtins {
 impl Builtins {
     pub fn new(arena: &mut Arena<TyK>) -> Self {
         let i64 = arena.alloc(TyK::Number(NumberTy::I64)).into();
+        let void = arena.alloc(TyK::Void).into();
         Self {
             types: BuiltinTys {
                 none: arena.alloc(TyK::None).into(),
                 boolean: arena.alloc(TyK::Boolean).into(),
                 char: arena.alloc(TyK::Char).into(),
                 i64,
-                void: arena.alloc(TyK::Void).into(),
+                void,
                 array_i64: arena.alloc(TyK::Array(i64)).into(),
                 error: arena.alloc(TyK::Error).into(),
+                void_fn: arena
+                    .alloc(TyK::Lambda {
+                        params: vec![],
+                        rest: None,
+                        ret: void,
+                        generics: vec![],
+                    })
+                    .into(),
             },
         }
     }
@@ -50,4 +59,5 @@ pub struct BuiltinTys {
     pub void: Ty,
     pub array_i64: Ty,
     pub error: Ty,
+    pub void_fn: Ty,
 }

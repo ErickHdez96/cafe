@@ -1,7 +1,7 @@
 mod arena;
 pub mod asm;
 pub mod atty;
-//pub mod codegen;
+pub mod codegen;
 pub mod compiler;
 pub mod config;
 pub mod diagnostics;

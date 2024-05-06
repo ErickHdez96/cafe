@@ -6,9 +6,9 @@ use crate::{
     test::{test_expand_str_with_libs, typecheck_id, Libs},
 };
 
-mod primitives;
+mod application;
 mod function;
-mod lambda;
+mod primitives;
 
 fn check(input: &str, expected_bindings: Expect, expected_mod: Expect) {
     let mut interner = Interner::default();
@@ -53,13 +53,36 @@ mod if_ {
                   {define@0:44..43
                     {|select| : (∀ '(a) (-> boolean a a a)) 0:52..6}
                     {λ : (-> boolean '4 '4 '4) 0:59..27
-                      ({|x| : boolean 0:68..1}} {|y| : '4 0:70..1}} {|z| : '4 0:72..1}})
+                      ({|x| : boolean 0:68..1} {|y| : '4 0:70..1} {|z| : '4 0:72..1})
                       #f
                       {body 0:59..27
                         {if 0:75..10
                           {var |x| : boolean (#script ()) 0:79..1}
                           {var |y| : '4 (#script ()) 0:81..1}
                           {var |z| : '4 (#script ()) 0:83..1}}}}}}
+            "#]],
+        );
+    }
+
+    #[test]
+    fn return_char_or_second_variable() {
+        check(
+            r"(import (rnrs expander core))
+              (define select (lambda (x y) (if x #\a y)))",
+            expect!["select: (∀ '() (-> boolean char char))"],
+            expect![[r#"
+                {body 0:0..87
+                  {import (rnrs expander core ())@0:0..29}
+                  {define@0:44..43
+                    {|select| : (∀ '() (-> boolean char char)) 0:52..6}
+                    {λ : (-> boolean char char) 0:59..27
+                      ({|x| : boolean 0:68..1} {|y| : char 0:70..1})
+                      #f
+                      {body 0:59..27
+                        {if 0:73..12
+                          {var |x| : boolean (#script ()) 0:77..1}
+                          {#\a : char 0:79..3}
+                          {var |y| : char (#script ()) 0:83..1}}}}}}
             "#]],
         );
     }
@@ -76,7 +99,7 @@ mod if_ {
                   {define@0:44..52
                     {|select| : (∀ '() (-> boolean boolean boolean boolean)) 0:52..6}
                     {λ : (-> boolean boolean boolean boolean) 0:59..36
-                      ({|x| : boolean 0:68..1}} {|y| : boolean 0:70..1}} {|z| : boolean 0:72..1}})
+                      ({|x| : boolean 0:68..1} {|y| : boolean 0:70..1} {|z| : boolean 0:72..1})
                       #f
                       {body 0:59..36
                         {if 0:75..19

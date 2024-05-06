@@ -28,6 +28,20 @@ impl TyScheme {
             generics: GenericMap::Owned(HashMap::from_iter(generic_vec.into_iter().zip('a'..))),
         }
     }
+
+    pub fn generics(&self) -> Vec<Ty> {
+        let mut generics = vec![];
+        let mut tys = self;
+        loop {
+            match tys {
+                TyScheme::STy(_) => return generics,
+                TyScheme::QTy(g, ty) => {
+                    generics.extend_from_slice(g);
+                    tys = ty;
+                }
+            }
+        }
+    }
 }
 
 impl From<Ty> for TyScheme {
@@ -231,12 +245,19 @@ impl fmt::Debug for TyArena<'_, '_> {
                     params, rest, ret, ..
                 } => write!(
                     f,
-                    "(-> {}{} {:#?})",
-                    params
-                        .iter()
-                        .map(|p| format!("{:#?}", self.with_ty(*p)))
-                        .collect::<Vec<_>>()
-                        .join(" "),
+                    "(->{}{} {:#?})",
+                    if params.is_empty() {
+                        String::new()
+                    } else {
+                        format!(
+                            " {}",
+                            params
+                                .iter()
+                                .map(|p| format!("{:#?}", self.with_ty(*p)))
+                                .collect::<Vec<_>>()
+                                .join(" ")
+                        )
+                    },
                     match rest {
                         Some(r) => format!(" ({:#?} ...)", self.with_ty(*r)),
                         None => String::new(),

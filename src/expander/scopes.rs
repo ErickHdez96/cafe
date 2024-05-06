@@ -70,11 +70,6 @@ impl hash::Hash for Scopes {
     }
 }
 
-trait Scoped {
-    fn add_scope(&mut self, scope: Scope);
-    fn flip_scope(&mut self, scope: Scope);
-}
-
 thread_local! {
-    static SCOPE_ID: Cell<u64> = Cell::new(1);
+    static SCOPE_ID: Cell<u64> = const { Cell::new(1) };
 }

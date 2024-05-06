@@ -79,5 +79,5 @@ impl Binding {
 }
 
 thread_local! {
-    static IDENTIFIER_ID: Cell<u64> = Cell::new(1);
+    static IDENTIFIER_ID: Cell<u64> = const { Cell::new(1) };
 }
