@@ -1,6 +1,6 @@
 use crate::{
     arena::Arena,
-    asm::{Condition, Direction, Inst, Register, ISA},
+    asm::{Condition, Direction, Inst, Insts, Register, ISA},
     ir,
     span::Span,
     symbol::Symbol,
@@ -9,8 +9,8 @@ use crate::{
     utils::mangle_symbol,
 };
 
-pub fn codegen(ir: ir::Package, types: &Arena<TyK>) -> Vec<Inst> {
-    Codegen::new(types).generate(ir)
+pub fn codegen(ir: ir::Package, types: &Arena<TyK>) -> Insts {
+    Insts(Codegen::new(types).generate(ir))
 }
 
 struct Codegen<'tyc> {
@@ -520,23 +520,12 @@ pub fn canonicalize_symbol(path: &ast::Path) -> Symbol {
 
 #[cfg(test)]
 mod tests {
-    use crate::{asm::Inst, interner::Interner, test::test_codegen_str};
+    use crate::{interner::Interner, test::test_codegen_str};
     use expect_test::{expect, Expect};
 
     fn check(input: &str, expected: Expect) {
         let res = test_codegen_str(input, &mut Interner::default());
-        expected.assert_eq(
-            &res.into_iter()
-                .map(|Inst { span, value }| {
-                    if span.is_dummy() {
-                        value
-                    } else {
-                        format!("{value}; ({span})")
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join("\n"),
-        );
+        expected.assert_eq(&res.to_string());
     }
 
     mod primitives {

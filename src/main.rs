@@ -22,7 +22,7 @@ fn main() {
 
     match compiler.compile_file(input) {
         Ok(insts) => {
-            println!("{:#?}", insts);
+            println!("{insts}");
             emit_diagnostics(&compiler, &compiler.take_diagnostics());
         }
         Err(_) => todo!(),

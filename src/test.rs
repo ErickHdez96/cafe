@@ -178,7 +178,7 @@ pub fn test_lower_str(input: &str, interner: &mut Interner) -> ir::Package {
     )
 }
 
-pub fn test_codegen_str(input: &str, interner: &mut Interner) -> Vec<asm::Inst> {
+pub fn test_codegen_str(input: &str, interner: &mut Interner) -> asm::Insts {
     codegen(test_lower_str(input, interner), &mut interner.types)
 }
 

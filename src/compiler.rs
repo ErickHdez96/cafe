@@ -289,11 +289,11 @@ impl Compiler {
         )
     }
 
-    fn codegen(&mut self, ir: ir::Package) -> Vec<asm::Inst> {
+    fn codegen(&mut self, ir: ir::Package) -> asm::Insts {
         codegen::codegen(ir, &self.interner.types)
     }
 
-    pub fn compile_file(&mut self, path: impl AsRef<path::Path>) -> Res<Vec<asm::Inst>> {
+    pub fn compile_file(&mut self, path: impl AsRef<path::Path>) -> Res<asm::Insts> {
         let path = path.as_ref();
         let mid = ast::ModuleName {
             paths: vec![path.file_name().unwrap().to_string_lossy().as_ref().into()],

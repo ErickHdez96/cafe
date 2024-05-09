@@ -8,6 +8,24 @@ use core::fmt;
 use crate::span::Span;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Insts(pub Vec<Inst>);
+
+impl fmt::Display for Insts {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (idx, Inst { span, value }) in self.0.iter().enumerate() {
+            write!(f, "{value}")?;
+            if !span.is_dummy() {
+                write!(f, "; ({span})")?;
+            }
+            if idx < self.0.len() - 1 {
+                writeln!(f)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Inst {
     pub span: Span,
     pub value: String,
