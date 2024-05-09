@@ -31,12 +31,14 @@ fn id_multiple_instantiations() {
     check(
         r"(import (rnrs expander core))
           (define id (lambda (x) x))
-          (id 3)
-          (id #t)
-          (id #\a)",
-        expect!["id: (∀ '(a) (-> a a))"],
+          (define _ (id 3))
+          (define _ (id #t))
+          (define _ (id #\a))",
         expect![[r#"
-            {body 0:0..120
+            id: (∀ '(a) (-> a a))
+            _: char"#]],
+        expect![[r#"
+            {body 0:0..153
               {import (rnrs expander core ())@0:0..29}
               {define@0:40..26
                 {|id| : (∀ '(a) (-> a a)) 0:48..2}
@@ -45,15 +47,21 @@ fn id_multiple_instantiations() {
                   #f
                   {body 0:51..14
                     {var |x| : '1 (#script ()) 0:63..1}}}}
-              {list 0:77..6
-                {var |id| : (-> i64 i64) (#script ()) 0:78..2}
-                {3 : i64 0:81..1}}
-              {list 0:94..7
-                {var |id| : (-> boolean boolean) (#script ()) 0:95..2}
-                {#t : boolean 0:98..2}}
-              {list 0:112..8
-                {var |id| : (-> char char) (#script ()) 0:113..2}
-                {#\a : char 0:116..3}}}
+              {define@0:77..17
+                {|_| : i64 0:85..1}
+                {list 0:87..6
+                  {var |id| : (-> i64 i64) (#script ()) 0:88..2}
+                  {3 : i64 0:91..1}}}
+              {define@0:105..18
+                {|_| : boolean 0:113..1}
+                {list 0:115..7
+                  {var |id| : (-> boolean boolean) (#script ()) 0:116..2}
+                  {#t : boolean 0:119..2}}}
+              {define@0:134..19
+                {|_| : char 0:142..1}
+                {list 0:144..8
+                  {var |id| : (-> char char) (#script ()) 0:145..2}
+                  {#\a : char 0:148..3}}}}
         "#]],
     );
 }
@@ -62,18 +70,20 @@ fn id_multiple_instantiations() {
 fn anonymous_id() {
     check(
         r"(import (rnrs expander core))
-          ((lambda (x) x) #t)",
-        expect![""],
+          (define _ ((lambda (x) x) #t))",
+        expect!["_: boolean"],
         expect![[r#"
-            {body 0:0..59
+            {body 0:0..70
               {import (rnrs expander core ())@0:0..29}
-              {list 0:40..19
-                {λ : (-> boolean boolean) 0:41..14
-                  ({|x| : boolean 0:50..1})
-                  #f
-                  {body 0:41..14
-                    {var |x| : boolean (#script ()) 0:53..1}}}
-                {#t : boolean 0:56..2}}}
+              {define@0:40..30
+                {|_| : boolean 0:48..1}
+                {list 0:50..19
+                  {λ : (-> boolean boolean) 0:51..14
+                    ({|x| : boolean 0:60..1})
+                    #f
+                    {body 0:51..14
+                      {var |x| : boolean (#script ()) 0:63..1}}}
+                  {#t : boolean 0:66..2}}}}
         "#]],
     );
 }

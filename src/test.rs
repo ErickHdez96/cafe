@@ -3,6 +3,7 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc};
 use crate::{
     asm,
     codegen::codegen,
+    config::Language,
     diagnostics::Diagnostic,
     env::Env,
     expander::{
@@ -21,6 +22,52 @@ use crate::{
     },
     tyc::typecheck_module,
 };
+
+#[derive(Debug)]
+pub struct Tester<'a> {
+    language: Language,
+    input: &'a str,
+    interner: Option<&'a mut Interner>,
+    libs: Option<Libs>,
+}
+
+impl<'a> Tester<'a> {
+    pub fn with_input(input: &'a str) -> Self {
+        Self {
+            language: Language::default(),
+            input,
+            interner: None,
+            libs: None,
+        }
+    }
+
+    pub fn interner(mut self, interner: &'a mut Interner) -> Self {
+        self.interner = Some(interner);
+        self
+    }
+
+    fn assert_interner(&self) {
+        assert!(self.interner.is_some(), "Tester needs an interner");
+    }
+
+    fn assert_libs(&mut self) {
+        if self.libs.is_none() {
+            self.libs = Some(Libs::new(
+                self.interner.as_mut().expect("Tester needs an interner"),
+            ));
+        }
+    }
+
+    pub fn test_expand_str(&mut self) -> ExpanderResultMod {
+        self.assert_interner();
+        self.assert_libs();
+        test_expand_str_with_libs(
+            self.input,
+            self.libs.as_ref().unwrap(),
+            self.interner.as_mut().unwrap(),
+        )
+    }
+}
 
 pub fn rnrs_env(interner: &mut Interner) -> Env<'static, Symbol, Binding> {
     let mut env = intrinsics_env().enter_consume();
@@ -135,6 +182,7 @@ pub fn test_codegen_str(input: &str, interner: &mut Interner) -> Vec<asm::Inst> 
     codegen(test_lower_str(input, interner), &mut interner.types)
 }
 
+#[derive(Debug)]
 pub struct Libs {
     pub modules: RefCell<HashMap<ast::ModId, Rc<ast::Module>>>,
     pub interfaces: RefCell<HashMap<ast::ModId, Rc<ast::ModuleInterface>>>,

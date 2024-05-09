@@ -120,6 +120,12 @@ pub enum CstKind {
     Eof,
 }
 
+impl CstKind {
+    pub const fn is_list(&self) -> bool {
+        matches!(self, Self::List(_, _))
+    }
+}
+
 impl From<Token<'_>> for CstKind {
     fn from(value: Token<'_>) -> Self {
         use super::TokenKind as SK;

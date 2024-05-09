@@ -1,6 +1,7 @@
 use std::{fmt, rc::Rc};
 
 use crate::{
+    config::Language,
     diagnostics::{Diagnostic, DiagnosticBuilder},
     env::Env,
     expander::intrinsics::import,
@@ -67,6 +68,7 @@ pub fn expand_module_with_config(
     config: ExpanderConfig,
 ) -> ExpanderResultMod {
     let mut e = Expander {
+        language: config.language,
         file_id: config.file_id.expect("missing file_id"),
         diagnostics: vec![],
         module: config.mod_id.unwrap_or_else(ast::ModuleName::script),
@@ -80,6 +82,7 @@ pub fn expand_module_with_config(
 }
 
 pub struct Expander<'i> {
+    language: Language,
     file_id: FileId,
     diagnostics: Vec<Diagnostic>,
     module: ast::ModId,
@@ -103,6 +106,7 @@ impl fmt::Debug for Expander<'_> {
 
 #[derive(Default)]
 pub struct ExpanderConfig<'i, 'env> {
+    language: Language,
     import: Option<&'i dyn Fn(ast::ModId) -> Result<Rc<ast::ModuleInterface>, Diagnostic>>,
     register: Option<&'i dyn Fn(ast::ModId, ast::Module)>,
     file_id: Option<FileId>,
@@ -111,6 +115,11 @@ pub struct ExpanderConfig<'i, 'env> {
 }
 
 impl<'i, 'env> ExpanderConfig<'i, 'env> {
+    pub fn language(mut self, language: Language) -> Self {
+        self.language = language;
+        self
+    }
+
     pub fn import(
         mut self,
         importer: &'i dyn Fn(ast::ModId) -> Result<Rc<ast::ModuleInterface>, Diagnostic>,
@@ -145,7 +154,7 @@ impl Expander<'_> {
         let mut bindings = env.enter();
         let items = Source::new(mod_)
             .filter(|c| c.is_datum())
-            .map(|c| self.expand_cst(c, &mut bindings))
+            .map(|c| self.expand_cst(c, Ctx::Toplevel, &mut bindings))
             .collect::<Vec<_>>();
         let span = items
             .first()
@@ -172,12 +181,17 @@ impl Expander<'_> {
         }
     }
 
-    fn expand_cst(&mut self, cst: Rc<Cst>, env: &mut BEnv) -> Item {
+    fn expand_cst(&mut self, cst: Rc<Cst>, ctx: Ctx, env: &mut BEnv) -> Item {
         let span = cst.span;
+
+        if !cst.kind.is_list() {
+            self.language.expand_expression(self, span, ctx);
+        }
+
         match &cst.kind {
-            CstKind::List(l, k) => self.expand_list(Source::new(l.clone()), *k, span, env),
+            CstKind::List(l, k) => self.expand_list(Source::new(l.clone()), *k, span, ctx, env),
             CstKind::Abbreviation(prefix, expr) => {
-                self.expand_abbreviation(Rc::clone(prefix), Rc::clone(expr), span, env)
+                self.expand_abbreviation(Rc::clone(prefix), Rc::clone(expr), span, ctx, env)
             }
             CstKind::Prefix(_) => todo!(),
             CstKind::Delim(_) => todo!(),
@@ -217,12 +231,14 @@ impl Expander<'_> {
         mut source: Source,
         kind: ListKind,
         span: Span,
+        ctx: Ctx,
         env: &mut BEnv,
     ) -> Item {
         match (source.peek(), kind) {
             (Some(cst), ListKind::List) => match &cst.as_ref().kind {
                 CstKind::Ident(ident) => match env.get(ident) {
                     Some(Binding::CoreExprTransformer { transformer, .. }) => {
+                        self.language.expand_expression(self, span, ctx);
                         transformer(self, source.reset(), span, env)
                     }
                     Some(Binding::CoreDefTransformer { transformer, .. }) => {
@@ -236,33 +252,39 @@ impl Expander<'_> {
                         let mid = module(self, source.reset(), span);
                         ast::Item::Mod(mid, span)
                     }
-                    _ => ast::Expr {
+                    _ => {
+                        self.language.expand_expression(self, span, ctx);
+                        ast::Expr {
+                            span,
+                            kind: ast::ExprKind::List(
+                                source
+                                    .map(|c| match self.expand_cst(c, Ctx::Expr, env) {
+                                        Item::Expr(e) => e,
+                                        r => todo!("{r:?}"),
+                                    })
+                                    .collect(),
+                            ),
+                            ty: None,
+                        }
+                        .into()
+                    }
+                },
+                _ => {
+                    self.language.expand_expression(self, span, ctx);
+                    ast::Expr {
                         span,
                         kind: ast::ExprKind::List(
                             source
-                                .map(|c| match self.expand_cst(c, env) {
+                                .map(|c| match self.expand_cst(c, Ctx::Expr, env) {
                                     Item::Expr(e) => e,
-                                    r => todo!("{r:?}"),
+                                    _ => todo!(),
                                 })
                                 .collect(),
                         ),
                         ty: None,
                     }
-                    .into(),
-                },
-                _ => ast::Expr {
-                    span,
-                    kind: ast::ExprKind::List(
-                        source
-                            .map(|c| match self.expand_cst(c, env) {
-                                Item::Expr(e) => e,
-                                _ => todo!(),
-                            })
-                            .collect(),
-                    ),
-                    ty: None,
+                    .into()
                 }
-                .into(),
             },
             (None, ListKind::List) => {
                 self.emit_error(|b| b.msg("empty lists must be quoted").span(span));
@@ -312,6 +334,7 @@ impl Expander<'_> {
         prefix: Rc<Cst>,
         expr: Rc<Cst>,
         span: Span,
+        ctx: Ctx,
         env: &mut BEnv,
     ) -> Item {
         let prefix_span = prefix.span;
@@ -334,6 +357,7 @@ impl Expander<'_> {
                         ListKind::List,
                     ),
                 }),
+                ctx,
                 env,
             ),
             Prefix::Backtick => todo!(),
@@ -359,6 +383,13 @@ impl Expander<'_> {
         self.diagnostics
             .push(builder(Diagnostic::builder()).finish());
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum Ctx {
+    Toplevel,
+    Lambda,
+    Expr,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -426,16 +457,32 @@ impl Iterator for Source {
     }
 }
 
+impl Language {
+    fn expand_expression(self, expander: &mut Expander, span: Span, ctx: Ctx) {
+        if let (Self::Cafe, Ctx::Toplevel) = (self, ctx) {
+            expander.emit_error(|b| {
+                b.msg("expressions aren't allowed as top-level items")
+                    .span(span)
+            });
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use expect_test::{expect, Expect};
 
-    use crate::{interner::Interner, test::test_expand_str};
+    use crate::{
+        interner::Interner,
+        test::{test_expand_str, Tester},
+    };
 
     use super::*;
 
     pub fn check(input: &str, expected: Expect) -> ExpanderResultMod {
-        let res = test_expand_str(input, &mut Interner::default());
+        let res = Tester::with_input(input)
+            .interner(&mut Interner::default())
+            .test_expand_str();
         expected.assert_debug_eq(&res.module.body);
         res
     }
@@ -443,17 +490,21 @@ mod tests {
     #[test]
     fn boolean() {
         check(
-            "#t",
+            "(define _ #t)",
             expect![[r#"
-                {body 0:0..2
-                  {#t 0:0..2}}
+                {body 0:0..13
+                  {define@0:0..13
+                    {|_| 0:8..1}
+                    {#t 0:10..2}}}
             "#]],
         );
         check(
-            "#f",
+            "(define _ #f)",
             expect![[r#"
-                {body 0:0..2
-                  {#f 0:0..2}}
+                {body 0:0..13
+                  {define@0:0..13
+                    {|_| 0:8..1}
+                    {#f 0:10..2}}}
             "#]],
         );
     }
@@ -461,108 +512,138 @@ mod tests {
     #[test]
     fn char() {
         check(
-            r"#\a",
+            r"(define _ #\a)",
             expect![[r#"
-                {body 0:0..3
-                  {#\a 0:0..3}}
+                {body 0:0..14
+                  {define@0:0..14
+                    {|_| 0:8..1}
+                    {#\a 0:10..3}}}
             "#]],
         );
         check(
-            r"#\λ",
+            r"(define _ #\λ)",
             expect![[r#"
-                {body 0:0..4
-                  {#\λ 0:0..4}}
+                {body 0:0..15
+                  {define@0:0..15
+                    {|_| 0:8..1}
+                    {#\λ 0:10..4}}}
             "#]],
         );
         check(
-            r"#\x3bb",
+            r"(define _ #\x3bb)",
             expect![[r#"
-                {body 0:0..6
-                  {#\λ 0:0..6}}
+                {body 0:0..17
+                  {define@0:0..17
+                    {|_| 0:8..1}
+                    {#\λ 0:10..6}}}
             "#]],
         );
         check(
-            r"#\nul",
+            r"(define _ #\nul)",
             expect![[r#"
-                {body 0:0..5
-                  {#\x0 0:0..5}}
+                {body 0:0..16
+                  {define@0:0..16
+                    {|_| 0:8..1}
+                    {#\x0 0:10..5}}}
             "#]],
         );
         check(
-            r"#\alarm",
+            r"(define _ #\alarm)",
             expect![[r#"
-                {body 0:0..7
-                  {#\x7 0:0..7}}
+                {body 0:0..18
+                  {define@0:0..18
+                    {|_| 0:8..1}
+                    {#\x7 0:10..7}}}
             "#]],
         );
         check(
-            r"#\backspace",
+            r"(define _ #\backspace)",
             expect![[r#"
-                {body 0:0..11
-                  {#\x8 0:0..11}}
+                {body 0:0..22
+                  {define@0:0..22
+                    {|_| 0:8..1}
+                    {#\x8 0:10..11}}}
             "#]],
         );
         check(
-            r"#\tab",
+            r"(define _ #\tab)",
             expect![[r#"
-                {body 0:0..5
-                  {#\x9 0:0..5}}
+                {body 0:0..16
+                  {define@0:0..16
+                    {|_| 0:8..1}
+                    {#\x9 0:10..5}}}
             "#]],
         );
         check(
-            r"#\linefeed",
+            r"(define _ #\linefeed)",
             expect![[r#"
-                {body 0:0..10
-                  {#\xA 0:0..10}}
+                {body 0:0..21
+                  {define@0:0..21
+                    {|_| 0:8..1}
+                    {#\xA 0:10..10}}}
             "#]],
         );
         check(
-            r"#\newline",
+            r"(define _ #\newline)",
             expect![[r#"
-                {body 0:0..9
-                  {#\xA 0:0..9}}
+                {body 0:0..20
+                  {define@0:0..20
+                    {|_| 0:8..1}
+                    {#\xA 0:10..9}}}
             "#]],
         );
         check(
-            r"#\vtab",
+            r"(define _ #\vtab)",
             expect![[r#"
-                {body 0:0..6
-                  {#\xB 0:0..6}}
+                {body 0:0..17
+                  {define@0:0..17
+                    {|_| 0:8..1}
+                    {#\xB 0:10..6}}}
             "#]],
         );
         check(
-            r"#\page",
+            r"(define _ #\page)",
             expect![[r#"
-                {body 0:0..6
-                  {#\xC 0:0..6}}
+                {body 0:0..17
+                  {define@0:0..17
+                    {|_| 0:8..1}
+                    {#\xC 0:10..6}}}
             "#]],
         );
         check(
-            r"#\return",
+            r"(define _ #\return)",
             expect![[r#"
-                {body 0:0..8
-                  {#\xD 0:0..8}}
+                {body 0:0..19
+                  {define@0:0..19
+                    {|_| 0:8..1}
+                    {#\xD 0:10..8}}}
             "#]],
         );
         check(
-            r"#\esc",
+            r"(define _ #\esc)",
             expect![[r#"
-                {body 0:0..5
-                  {#\x1B 0:0..5}}
+                {body 0:0..16
+                  {define@0:0..16
+                    {|_| 0:8..1}
+                    {#\x1B 0:10..5}}}
             "#]],
         );
         check(
-            r"#\space",
+            r"(define _ #\space)",
             expect![[r#"
-                {body 0:0..7
-                  {#\x20 0:0..7}}
+                {body 0:0..18
+                  {define@0:0..18
+                    {|_| 0:8..1}
+                    {#\x20 0:10..7}}}
             "#]],
         );
         check(
-            r"#\delete",
+            r"(define _ #\delete)",
             expect![[r#"
-                {body 0:0..8
-                  {#\x7F 0:0..8}}
+                {body 0:0..19
+                  {define@0:0..19
+                    {|_| 0:8..1}
+                    {#\x7F 0:10..8}}}
             "#]],
         );
     }
@@ -570,17 +651,21 @@ mod tests {
     #[test]
     fn number() {
         check(
-            "0",
+            "(define _ 0)",
             expect![[r#"
-                {body 0:0..1
-                  {0 0:0..1}}
+                {body 0:0..12
+                  {define@0:0..12
+                    {|_| 0:8..1}
+                    {0 0:10..1}}}
             "#]],
         );
         check(
-            "3",
+            "(define _ 3)",
             expect![[r#"
-                {body 0:0..1
-                  {3 0:0..1}}
+                {body 0:0..12
+                  {define@0:0..12
+                    {|_| 0:8..1}
+                    {3 0:10..1}}}
             "#]],
         );
     }
@@ -588,10 +673,12 @@ mod tests {
     #[test]
     fn variables() {
         check(
-            "and",
+            "(define _ and)",
             expect![[r#"
-                {body 0:0..3
-                  {var |and| (rnrs intrinsics ()) 0:0..3}}
+                {body 0:0..14
+                  {define@0:0..14
+                    {|_| 0:8..1}
+                    {var |and| (rnrs intrinsics ()) 0:10..3}}}
             "#]],
         );
     }
@@ -599,45 +686,51 @@ mod tests {
     #[test]
     fn function_application() {
         check(
-            r"(and #t #f)",
+            r"(define _ (and #t #f))",
             expect![[r#"
-                {body 0:0..11
-                  {list 0:0..11
-                    {var |and| (rnrs intrinsics ()) 0:1..3}
-                    {#t 0:5..2}
-                    {#f 0:8..2}}}
+                {body 0:0..22
+                  {define@0:0..22
+                    {|_| 0:8..1}
+                    {list 0:10..11
+                      {var |and| (rnrs intrinsics ()) 0:11..3}
+                      {#t 0:15..2}
+                      {#f 0:18..2}}}}
             "#]],
         );
         check(
-            r"((lambda (x) x) #t)",
+            r"(define _ ((lambda (x) x) #t))",
             expect![[r#"
-                {body 0:0..19
-                  {list 0:0..19
-                    {λ 0:1..14
-                      ({|x| 0:10..1})
-                      #f
-                      {body 0:1..14
-                        {var |x| (#script ()) 0:13..1}}}
-                    {#t 0:16..2}}}
+                {body 0:0..30
+                  {define@0:0..30
+                    {|_| 0:8..1}
+                    {list 0:10..19
+                      {λ 0:11..14
+                        ({|x| 0:20..1})
+                        #f
+                        {body 0:11..14
+                          {var |x| (#script ()) 0:23..1}}}
+                      {#t 0:26..2}}}}
             "#]],
         );
         check(
-            r"((lambda (x) ((lambda (y) y) x)) #t)",
+            r"(define _ ((lambda (x) ((lambda (y) y) x)) #t))",
             expect![[r#"
-                {body 0:0..36
-                  {list 0:0..36
-                    {λ 0:1..31
-                      ({|x| 0:10..1})
-                      #f
-                      {body 0:1..31
-                        {list 0:13..18
-                          {λ 0:14..14
-                            ({|y| 0:23..1})
-                            #f
-                            {body 0:14..14
-                              {var |y| (#script ()) 0:26..1}}}
-                          {var |x| (#script ()) 0:29..1}}}}
-                    {#t 0:33..2}}}
+                {body 0:0..47
+                  {define@0:0..47
+                    {|_| 0:8..1}
+                    {list 0:10..36
+                      {λ 0:11..31
+                        ({|x| 0:20..1})
+                        #f
+                        {body 0:11..31
+                          {list 0:23..18
+                            {λ 0:24..14
+                              ({|y| 0:33..1})
+                              #f
+                              {body 0:24..14
+                                {var |y| (#script ()) 0:36..1}}}
+                            {var |x| (#script ()) 0:39..1}}}}
+                      {#t 0:43..2}}}}
             "#]],
         );
     }
@@ -645,23 +738,27 @@ mod tests {
     #[test]
     fn if_() {
         check(
-            r"(if #\a #\b)",
+            r"(define _ (if #\a #\b))",
             expect![[r#"
-                {body 0:0..12
-                  {if 0:0..12
-                    {#\a 0:4..3}
-                    {#\b 0:8..3}
-                    {void 0:0..12}}}
+                {body 0:0..23
+                  {define@0:0..23
+                    {|_| 0:8..1}
+                    {if 0:10..12
+                      {#\a 0:14..3}
+                      {#\b 0:18..3}
+                      {void 0:10..12}}}}
             "#]],
         );
         check(
-            r"(if #t #f #\f)",
+            r"(define _ (if #t #f #\f))",
             expect![[r#"
-                {body 0:0..14
-                  {if 0:0..14
-                    {#t 0:4..2}
-                    {#f 0:7..2}
-                    {#\f 0:10..3}}}
+                {body 0:0..25
+                  {define@0:0..25
+                    {|_| 0:8..1}
+                    {if 0:10..14
+                      {#t 0:14..2}
+                      {#f 0:17..2}
+                      {#\f 0:20..3}}}}
             "#]],
         );
     }
@@ -672,14 +769,16 @@ mod tests {
         #[test]
         fn list() {
             check(
-                "(lambda x x)",
+                "(define _ (lambda x x))",
                 expect![[r#"
-                    {body 0:0..12
-                      {λ 0:0..12
-                        ()
-                        {|x| 0:8..1}
-                        {body 0:0..12
-                          {var |x| (#script ()) 0:10..1}}}}
+                    {body 0:0..23
+                      {define@0:0..23
+                        {|_| 0:8..1}
+                        {λ 0:10..12
+                          ()
+                          {|x| 0:18..1}
+                          {body 0:10..12
+                            {var |x| (#script ()) 0:20..1}}}}}
                 "#]],
             );
         }
@@ -687,14 +786,16 @@ mod tests {
         #[test]
         fn id() {
             check(
-                "(lambda (x) x)",
+                "(define _ (lambda (x) x))",
                 expect![[r#"
-                    {body 0:0..14
-                      {λ 0:0..14
-                        ({|x| 0:9..1})
-                        #f
-                        {body 0:0..14
-                          {var |x| (#script ()) 0:12..1}}}}
+                    {body 0:0..25
+                      {define@0:0..25
+                        {|_| 0:8..1}
+                        {λ 0:10..14
+                          ({|x| 0:19..1})
+                          #f
+                          {body 0:10..14
+                            {var |x| (#script ()) 0:22..1}}}}}
                 "#]],
             );
         }
@@ -702,14 +803,16 @@ mod tests {
         #[test]
         fn rest() {
             check(
-                "(lambda (x . y) y)",
+                "(define _ (lambda (x . y) y))",
                 expect![[r#"
-                    {body 0:0..18
-                      {λ 0:0..18
-                        ({|x| 0:9..1})
-                        {|y| 0:13..1}
-                        {body 0:0..18
-                          {var |y| (#script ()) 0:16..1}}}}
+                    {body 0:0..29
+                      {define@0:0..29
+                        {|_| 0:8..1}
+                        {λ 0:10..18
+                          ({|x| 0:19..1})
+                          {|y| 0:23..1}
+                          {body 0:10..18
+                            {var |y| (#script ()) 0:26..1}}}}}
                 "#]],
             );
         }
@@ -717,17 +820,19 @@ mod tests {
         #[test]
         fn lambda_with_define() {
             check(
-                "(lambda x (define y x) y)",
+                "(define _ (lambda x (define y x) y))",
                 expect![[r#"
-                    {body 0:0..25
-                      {λ 0:0..25
-                        ()
-                        {|x| 0:8..1}
-                        {body 0:0..25
-                          {define@0:10..12
-                            {|y| 0:18..1}
-                            {var |x| (#script ()) 0:20..1}}
-                          {var |y| (#script ()) 0:23..1}}}}
+                    {body 0:0..36
+                      {define@0:0..36
+                        {|_| 0:8..1}
+                        {λ 0:10..25
+                          ()
+                          {|x| 0:18..1}
+                          {body 0:10..25
+                            {define@0:20..12
+                              {|y| 0:28..1}
+                              {var |x| (#script ()) 0:30..1}}
+                            {var |y| (#script ()) 0:33..1}}}}}
                 "#]],
             );
         }
@@ -773,35 +878,43 @@ mod tests {
         #[test]
         fn boolean() {
             check(
-                "(quote #t)",
+                "(define _ (quote #t))",
                 expect![[r#"
-                    {body 0:0..10
-                      {quote 0:0..10
-                        {#t 0:7..2}}}
+                    {body 0:0..21
+                      {define@0:0..21
+                        {|_| 0:8..1}
+                        {quote 0:10..10
+                          {#t 0:17..2}}}}
                 "#]],
             );
             check(
-                "(quote #T)",
+                "(define _ (quote #T))",
                 expect![[r#"
-                    {body 0:0..10
-                      {quote 0:0..10
-                        {#t 0:7..2}}}
+                    {body 0:0..21
+                      {define@0:0..21
+                        {|_| 0:8..1}
+                        {quote 0:10..10
+                          {#t 0:17..2}}}}
                 "#]],
             );
             check(
-                "(quote #f)",
+                "(define _ (quote #f))",
                 expect![[r#"
-                    {body 0:0..10
-                      {quote 0:0..10
-                        {#f 0:7..2}}}
+                    {body 0:0..21
+                      {define@0:0..21
+                        {|_| 0:8..1}
+                        {quote 0:10..10
+                          {#f 0:17..2}}}}
                 "#]],
             );
             check(
-                "(quote #F)",
+                "(define _ (quote #F))",
                 expect![[r#"
-                    {body 0:0..10
-                      {quote 0:0..10
-                        {#f 0:7..2}}}
+                    {body 0:0..21
+                      {define@0:0..21
+                        {|_| 0:8..1}
+                        {quote 0:10..10
+                          {#f 0:17..2}}}}
                 "#]],
             );
         }
@@ -809,11 +922,13 @@ mod tests {
         #[test]
         fn char() {
             check(
-                r"(quote #\a)",
+                r"(define _ (quote #\a))",
                 expect![[r#"
-                    {body 0:0..11
-                      {quote 0:0..11
-                        {#\a 0:7..3}}}
+                    {body 0:0..22
+                      {define@0:0..22
+                        {|_| 0:8..1}
+                        {quote 0:10..11
+                          {#\a 0:17..3}}}}
                 "#]],
             );
         }
@@ -821,11 +936,13 @@ mod tests {
         #[test]
         fn number() {
             check(
-                r"(quote 3)",
+                r"(define _ (quote 3))",
                 expect![[r#"
-                    {body 0:0..9
-                      {quote 0:0..9
-                        {3 0:7..1}}}
+                    {body 0:0..20
+                      {define@0:0..20
+                        {|_| 0:8..1}
+                        {quote 0:10..9
+                          {3 0:17..1}}}}
                 "#]],
             );
         }
@@ -833,19 +950,23 @@ mod tests {
         #[test]
         fn symbol() {
             check(
-                "(quote x)",
+                "(define _ (quote x))",
                 expect![[r#"
-                    {body 0:0..9
-                      {quote 0:0..9
-                        {var |x| (#script ()) 0:7..1}}}
+                    {body 0:0..20
+                      {define@0:0..20
+                        {|_| 0:8..1}
+                        {quote 0:10..9
+                          {var |x| (#script ()) 0:17..1}}}}
                 "#]],
             );
             check(
-                "(quote lambda)",
+                "(define _ (quote lambda))",
                 expect![[r#"
-                    {body 0:0..14
-                      {quote 0:0..14
-                        {var |lambda| (#script ()) 0:7..6}}}
+                    {body 0:0..25
+                      {define@0:0..25
+                        {|_| 0:8..1}
+                        {quote 0:10..14
+                          {var |lambda| (#script ()) 0:17..6}}}}
                 "#]],
             );
         }
@@ -853,11 +974,13 @@ mod tests {
         #[test]
         fn null() {
             check(
-                "(quote ())",
+                "(define _ (quote ()))",
                 expect![[r#"
-                    {body 0:0..10
-                      {quote 0:0..10
-                        {() 0:7..2}}}
+                    {body 0:0..21
+                      {define@0:0..21
+                        {|_| 0:8..1}
+                        {quote 0:10..10
+                          {() 0:17..2}}}}
                 "#]],
             );
         }
@@ -865,26 +988,30 @@ mod tests {
         #[test]
         fn list() {
             check(
-                "(quote (x))",
+                "(define _ (quote (x)))",
                 expect![[r#"
-                    {body 0:0..11
-                      {quote 0:0..11
-                        {list 0:7..3
-                          {var |x| (#script ()) 0:8..1}}}}
+                    {body 0:0..22
+                      {define@0:0..22
+                        {|_| 0:8..1}
+                        {quote 0:10..11
+                          {list 0:17..3
+                            {var |x| (#script ()) 0:18..1}}}}}
                 "#]],
             );
             check(
-                r"(quote (x ((#\λ)) . #t))",
+                r"(define _ (quote (x ((#\λ)) . #t)))",
                 expect![[r#"
-                    {body 0:0..25
-                      {quote 0:0..25
-                        {dotted-list 0:7..17
-                          {var |x| (#script ()) 0:8..1}
-                          {list 0:10..8
-                            {list 0:11..6
-                              {#\λ 0:12..4}}}
-                          .
-                          {#t 0:21..2}}}}
+                    {body 0:0..36
+                      {define@0:0..36
+                        {|_| 0:8..1}
+                        {quote 0:10..25
+                          {dotted-list 0:17..17
+                            {var |x| (#script ()) 0:18..1}
+                            {list 0:20..8
+                              {list 0:21..6
+                                {#\λ 0:22..4}}}
+                            .
+                            {#t 0:31..2}}}}}
                 "#]],
             );
         }
@@ -893,11 +1020,13 @@ mod tests {
     #[test]
     fn quote_abbrev() {
         check(
-            "'#t",
+            "(define _ '#t)",
             expect![[r#"
-                {body 0:0..3
-                  {quote 0:0..3
-                    {#t 0:1..2}}}
+                {body 0:0..14
+                  {define@0:0..14
+                    {|_| 0:8..1}
+                    {quote 0:10..3
+                      {#t 0:11..2}}}}
             "#]],
         );
     }
@@ -910,9 +1039,9 @@ mod tests {
             check(
                 r"(import (rnrs expander core ()))
                   (define id (lambda (x) x))
-                  (id #t)",
+                  (define _ (id #t))",
                 expect![[r#"
-                    {body 0:0..103
+                    {body 0:0..114
                       {import (rnrs expander core ())@0:0..32}
                       {define@0:51..26
                         {|id| 0:59..2}
@@ -921,9 +1050,11 @@ mod tests {
                           #f
                           {body 0:62..14
                             {var |x| (#script ()) 0:74..1}}}}
-                      {list 0:96..7
-                        {var |id| (#script ()) 0:97..2}
-                        {#t 0:100..2}}}
+                      {define@0:96..18
+                        {|_| 0:104..1}
+                        {list 0:106..7
+                          {var |id| (#script ()) 0:107..2}
+                          {#t 0:110..2}}}}
                 "#]],
             );
         }
@@ -982,14 +1113,16 @@ mod tests {
                     (import (rnrs expander core ()))
                     (define id (lambda (x) x)))
                   (import (ID ()))
-                  (id #\a)",
+                  (define _ (id #\a))",
                 expect![[r#"
-                    {body 0:0..183
+                    {body 0:0..194
                       {module (ID ())@0:0..121}
                       {import (ID ())@0:140..16}
-                      {list 0:175..8
-                        {var |id| (ID ()) 0:176..2}
-                        {#\a 0:179..3}}}
+                      {define@0:175..19
+                        {|_| 0:183..1}
+                        {list 0:185..8
+                          {var |id| (ID ()) 0:186..2}
+                          {#\a 0:189..3}}}}
                 "#]],
             );
 
@@ -1012,16 +1145,18 @@ mod tests {
                 r"(module (rnrs base ()) (lambda)
                     (import (rnrs expander core ())))
                   (import (rnrs base ()))
-                  (lambda (x) x)",
+                  (define _ (lambda (x) x))",
                 expect![[r#"
-                    {body 0:0..160
+                    {body 0:0..171
                       {module (rnrs base ())@0:0..85}
                       {import (rnrs base ())@0:104..23}
-                      {λ 0:146..14
-                        ({|x| 0:155..1})
-                        #f
-                        {body 0:146..14
-                          {var |x| (#script ()) 0:158..1}}}}
+                      {define@0:146..25
+                        {|_| 0:154..1}
+                        {λ 0:156..14
+                          ({|x| 0:165..1})
+                          #f
+                          {body 0:156..14
+                            {var |x| (#script ()) 0:168..1}}}}}
                 "#]],
             );
 
@@ -1039,14 +1174,18 @@ mod tests {
         }
 
         #[test]
-        fn multiple_expressions() {
+        fn multiple_defines() {
             check(
-                r"#t
-                  #\a",
+                r"(define _ #t)
+                  (define _ #\a)",
                 expect![[r#"
-                    {body 0:0..24
-                      {#t 0:0..2}
-                      {#\a 0:21..3}}
+                    {body 0:0..46
+                      {define@0:0..13
+                        {|_| 0:8..1}
+                        {#t 0:10..2}}
+                      {define@0:32..14
+                        {|_| 0:40..1}
+                        {#\a 0:42..3}}}
                 "#]],
             );
         }
@@ -1055,27 +1194,31 @@ mod tests {
         fn import_core() {
             check(
                 "(import (rnrs expander core ()))
-                 (lambda (x) x)",
+                 (define _ (lambda (x) x))",
                 expect![[r#"
-                    {body 0:0..64
+                    {body 0:0..75
                       {import (rnrs expander core ())@0:0..32}
-                      {λ 0:50..14
-                        ({|x| 0:59..1})
-                        #f
-                        {body 0:50..14
-                          {var |x| (#script ()) 0:62..1}}}}
+                      {define@0:50..25
+                        {|_| 0:58..1}
+                        {λ 0:60..14
+                          ({|x| 0:69..1})
+                          #f
+                          {body 0:60..14
+                            {var |x| (#script ()) 0:72..1}}}}}
                 "#]],
             );
             let res = check(
                 "(import (rnrs expander core ()))
-                 (if #t #f)",
+                 (define _ (if #t #f))",
                 expect![[r#"
-                    {body 0:0..60
+                    {body 0:0..71
                       {import (rnrs expander core ())@0:0..32}
-                      {if 0:50..10
-                        {#t 0:54..2}
-                        {#f 0:57..2}
-                        {void 0:50..10}}}
+                      {define@0:50..21
+                        {|_| 0:58..1}
+                        {if 0:60..10
+                          {#t 0:64..2}
+                          {#f 0:67..2}
+                          {void 0:60..10}}}}
                 "#]],
             );
 

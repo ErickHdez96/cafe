@@ -1,6 +1,7 @@
 use std::rc::Rc;
 
 use crate::{
+    expander::Ctx,
     span::Span,
     syntax::{
         ast,
@@ -37,7 +38,7 @@ pub fn define_transformer(
         },
     );
     let expr = expander
-        .expand_cst(source.next().unwrap(), env)
+        .expand_cst(source.next().unwrap(), Ctx::Expr, env)
         .into_expr()
         .unwrap();
 
@@ -61,20 +62,20 @@ pub fn if_transformer(
 ) -> ast::Item {
     let cond = Box::new(
         expander
-            .expand_cst(source.nth(1).unwrap(), env)
+            .expand_cst(source.nth(1).unwrap(), Ctx::Expr, env)
             .into_expr()
             .unwrap(),
     );
     let r#true = Box::new(
         expander
-            .expand_cst(source.next().unwrap(), env)
+            .expand_cst(source.next().unwrap(), Ctx::Expr, env)
             .into_expr()
             .unwrap(),
     );
     let r#false = Box::new(
         source
             .next()
-            .map(|cst| expander.expand_cst(cst, env))
+            .map(|cst| expander.expand_cst(cst, Ctx::Expr, env))
             .map(|i| i.into_expr().unwrap())
             .unwrap_or_else(|| ast::Expr {
                 span,
@@ -187,7 +188,7 @@ pub fn lambda_transformer(
 
     let items = source
         .by_ref()
-        .map(|c| expander.expand_cst(c, &mut env))
+        .map(|c| expander.expand_cst(c, Ctx::Lambda, &mut env))
         .collect::<Vec<_>>();
     // TODO: emit diagnostics for expressions before the last define
 

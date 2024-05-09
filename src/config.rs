@@ -1,8 +1,8 @@
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum Language {
     #[default]
-    R6rs,
     Cafe,
+    R6rs,
 }
 
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Hash)]
