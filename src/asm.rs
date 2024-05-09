@@ -44,7 +44,7 @@ pub trait ISA {
     fn process_body(&self, body: &mut ir::Body, arena: &Arena<ty::TyK>);
     fn proc_begin(&self, body: &ir::Body) -> Vec<Inst>;
     fn proc_end(&self, body: &ir::Body) -> Vec<Inst>;
-    fn runtime(&self) -> Vec<Inst>;
+    fn runtime(&self) -> Insts;
     fn ty_size(&self, ty: &ty::TyK) -> usize;
     fn ty_alignment(&self, ty: &ty::TyK) -> usize;
 }

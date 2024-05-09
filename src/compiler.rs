@@ -329,6 +329,10 @@ where
         let pkg = self.lower_module(mid);
         Ok(self.codegen(pkg))
     }
+
+    pub fn runtime(&self) -> asm::Insts {
+        self.isa.runtime()
+    }
 }
 
 #[derive(Debug, Default)]

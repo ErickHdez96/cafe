@@ -11,7 +11,7 @@ use crate::{
     utils::mangle_symbol,
 };
 
-use super::{Inst, Register, ISA};
+use super::{Inst, Insts, Register, ISA};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum Direction {
@@ -478,25 +478,10 @@ impl ISA for Aarch64 {
     ///
     /// * `_start` entry point to set up stack and terminate the program correctly.
     /// * primitive functions
-    fn runtime(&self) -> Vec<Inst> {
+    fn runtime(&self) -> Insts {
         let mut runtime = vec![];
         runtime.append(&mut Self::entry_point());
-        runtime.append(&mut Self::add_primitive());
-        runtime.append(&mut Self::write_char_primitive());
-        runtime
-    }
-}
-
-impl Aarch64 {
-    /// x0 = x0 + x1
-    fn add_primitive() -> Vec<Inst> {
-        vec![
-            Inst::pseudo_align(4),
-            Inst::pseudo_global("add".into()),
-            Inst::pseudo_label("add".into()),
-            Inst::new(Span::dummy(), String::from("\tadd x0, x0, x1")),
-            Inst::new(Span::dummy(), String::from("\tret lr")),
-        ]
+        Insts(runtime)
     }
 }
 
@@ -525,43 +510,6 @@ impl Aarch64 {
             // x0 (the exit code) ist set by main.
             // Call exit() from libc
             Inst::new(Span::dummy(), String::from("\tbl _exit")),
-        ]
-    }
-
-    fn write_char_primitive() -> Vec<Inst> {
-        vec![
-            Inst::pseudo_align(4),
-            Inst::pseudo_global("write_char".into()),
-            Inst::pseudo_label("write_char".into()),
-            Inst::new(Span::dummy(), String::from("\tsub sp, sp, #32")),
-            Inst::new(Span::dummy(), String::from("\tstp x29, x30, [sp, #16]")),
-            Inst::new(Span::dummy(), String::from("\tadd x29, sp, #16")),
-            Inst::new(Span::dummy(), String::from("\tmov x1, #0")),
-            Inst::new(Span::dummy(), String::from("\tstr x1, [sp, #8]")),
-            Inst::new(Span::dummy(), String::from("\tadd x1, sp, #8")),
-            Inst::new(Span::dummy(), String::from("\tmov x2, sp")),
-            Inst::new(Span::dummy(), String::from("\tbl char_to_utf8")),
-            Inst::new(Span::dummy(), String::from("\tldr x2, [sp]")),
-            Inst::new(Span::dummy(), String::from("\tstr x19, [sp]")),
-            Inst::new(Span::dummy(), String::from("\tmov x19, x2")),
-            Inst::new(Span::dummy(), String::from("\tldr x0, [sp, #8]")),
-            Inst::new(Span::dummy(), String::from("\tbl _putchar")),
-            Inst::new(Span::dummy(), String::from("\tcmp x19, #2")),
-            Inst::new(Span::dummy(), String::from("\tb.LO .end")),
-            Inst::new(Span::dummy(), String::from("\tldr x0, [sp, #9]")),
-            Inst::new(Span::dummy(), String::from("\tbl _putchar")),
-            Inst::new(Span::dummy(), String::from("\tcmp x19, #3")),
-            Inst::new(Span::dummy(), String::from("\tb.LO .end")),
-            Inst::new(Span::dummy(), String::from("\tldr x0, [sp, #10]")),
-            Inst::new(Span::dummy(), String::from("\tbl _putchar")),
-            Inst::new(Span::dummy(), String::from("\tcmp x19, #4")),
-            Inst::new(Span::dummy(), String::from("\tb.LO .end")),
-            Inst::new(Span::dummy(), String::from("\tldr x0, [sp, #11]")),
-            Inst::new(Span::dummy(), String::from("\tbl _putchar")),
-            Inst::pseudo_label(".end".into()),
-            Inst::new(Span::dummy(), String::from("\tldp x29, x30, [sp, #16]")),
-            Inst::new(Span::dummy(), String::from("\tadd sp, sp, #32")),
-            Inst::new(Span::dummy(), String::from("\tret")),
         ]
     }
 }

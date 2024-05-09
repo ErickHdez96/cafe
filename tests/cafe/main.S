@@ -1,4 +1,12 @@
 .align 4
+.global _main
+_main:
+	sub sp, sp, #16
+	stp x29, x30, [sp, #0]
+	mov x29, sp
+	bl main
+	bl _exit
+.align 4
 .global main
 main:
 	sub sp, sp, #16; (1:43..13)
