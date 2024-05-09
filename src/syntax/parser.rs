@@ -1146,19 +1146,18 @@ mod tests {
             );
         }
 
-        #[test]
-        #[ignore]
-        fn strings() {
-            check_error(
-                r#""\q""#,
-                vec![Diagnostic::builder()
-                    .error()
-                    .msg("invalid escape character")
-                    .span(Span::new(FileId::default(), 1, 2))
-                    .finish()],
-                expect![[r##"Identifier@0..4 ""\q"""##]],
-            );
-        }
+        //#[test]
+        //fn strings() {
+        //    check_error(
+        //        r#""\q""#,
+        //        vec![Diagnostic::builder()
+        //            .error()
+        //            .msg("invalid escape character")
+        //            .span(Span::new(FileId::default(), 1, 2))
+        //            .finish()],
+        //        expect![[r##"Identifier@0..4 ""\q"""##]],
+        //    );
+        //}
     }
 
     mod extended_syntax {

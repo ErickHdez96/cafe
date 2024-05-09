@@ -5,6 +5,7 @@ pub mod codegen;
 pub mod compiler;
 pub mod config;
 pub mod diagnostics;
+pub mod driver;
 pub mod env;
 pub mod expander;
 pub mod file;

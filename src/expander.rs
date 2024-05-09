@@ -1056,52 +1056,50 @@ mod tests {
             );
         }
 
-        #[test]
-        #[ignore]
-        fn define_and_use_macro() {
-            check(
-                r"(import (rnrs expander core ()))
-                  (define-syntax id (syntax-rules () [(_ e) e]))
-                  (id #t)",
-                expect![[r#"
-                    mod (#script ()) @0:0..123
-                      {letrec 0:0..123
-                        ()
-                        {#t 0:120..2}}
-                "#]],
-            );
-        }
+        //#[test]
+        //fn define_and_use_macro() {
+        //    check(
+        //        r"(import (rnrs expander core ()))
+        //          (define-syntax id (syntax-rules () [(_ e) e]))
+        //          (id #t)",
+        //        expect![[r#"
+        //            mod (#script ()) @0:0..123
+        //              {letrec 0:0..123
+        //                ()
+        //                {#t 0:120..2}}
+        //        "#]],
+        //    );
+        //}
 
-        #[test]
-        #[ignore]
-        fn define_let() {
-            check(
-                r"(import (rnrs expander core ()))
-                  (define-syntax let
-                    (syntax-rules () [(_ ((v e) ...) body0 body ...) ((lambda (v ...) body0 body ...) e ...)]))
-                  (let ([x #t]
-                        [y #\a])
-                    (if x (quote y)))",
-                expect![[r#"
-                    mod (#script ()) @0:0..283
-                      {letrec 0:0..283
-                        ()
-                        {list 0:200..83
-                          {λ 0:200..83
-                            ({|x 1| 0:207..1} {|y 2| 0:238..1})
-                            #f
-                            {letrec 0:200..83
-                              ()
-                              {if 0:266..16
-                                {var |x 1| (#script ()) 0:270..1}
-                                {quote 0:272..9
-                                  {var |y| (#script ()) 0:279..1}}
-                                {void 0:266..16}}}}
-                          {#t 0:209..2}
-                          {#\a 0:240..3}}}
-                "#]],
-            );
-        }
+        //#[test]
+        //fn define_let() {
+        //    check(
+        //        r"(import (rnrs expander core ()))
+        //          (define-syntax let
+        //            (syntax-rules () [(_ ((v e) ...) body0 body ...) ((lambda (v ...) body0 body ...) e ...)]))
+        //          (let ([x #t]
+        //                [y #\a])
+        //            (if x (quote y)))",
+        //        expect![[r#"
+        //            mod (#script ()) @0:0..283
+        //              {letrec 0:0..283
+        //                ()
+        //                {list 0:200..83
+        //                  {λ 0:200..83
+        //                    ({|x 1| 0:207..1} {|y 2| 0:238..1})
+        //                    #f
+        //                    {letrec 0:200..83
+        //                      ()
+        //                      {if 0:266..16
+        //                        {var |x 1| (#script ()) 0:270..1}
+        //                        {quote 0:272..9
+        //                          {var |y| (#script ()) 0:279..1}}
+        //                        {void 0:266..16}}}}
+        //                  {#t 0:209..2}
+        //                  {#\a 0:240..3}}}
+        //        "#]],
+        //    );
+        //}
 
         #[test]
         fn simple_module() {

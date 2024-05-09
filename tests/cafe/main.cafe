@@ -1,2 +1,8 @@
+#|
+|#
+#|
+|#
+; 0
+
 (import (rnrs expander core))
 (define main (lambda () 0))
