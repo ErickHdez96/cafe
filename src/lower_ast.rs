@@ -177,10 +177,10 @@ impl Lowerer<'_> {
             match item {
                 ast::Item::Define(d) => match &d.expr {
                     Some(e) if e.is_lambda() => {
-                        fns.push((d.span, &d.name, e, e.ty.unwrap()));
+                        fns.push((e.span, &d.name, e, e.ty.unwrap()));
                     }
                     _ => {
-                        _vars.push((d.span, &d.name, &d.expr));
+                        _vars.push((&d.name, &d.expr));
                     }
                 },
                 ast::Item::Expr(e) => {
@@ -211,7 +211,7 @@ impl Lowerer<'_> {
                 formal_tys.len(),
                 "some formals are lacking a type"
             );
-            let global = self.lower_lambda(
+            let path = self.lower_lambda(
                 Some(ident),
                 &formals
                     .iter()
@@ -224,11 +224,23 @@ impl Lowerer<'_> {
                 span,
                 &env,
             );
-            env.insert(ident.value, global.into());
+            env.insert(ident.value, path.into());
         }
 
-        for var_ in _vars {
-            todo!("{:?}", var_);
+        for (ident, expr) in _vars {
+            match expr {
+                Some(e) => {
+                    let path = ast::Path {
+                        span: ident.span,
+                        module: self.current_module,
+                        value: ident.value,
+                    };
+                    let local = self.lower_expr(e, Some(ident), None, &env);
+                    self.body_builder.store_label(path, local, e.span);
+                    env.insert(ident.value, path.into());
+                }
+                None => todo!(),
+            }
         }
 
         for e in exprs {
@@ -696,6 +708,13 @@ impl BodyBuilder {
         self.stmts.push(ir::Statement {
             span,
             kind: ir::StatementKind::CallLabel(dst, label),
+        });
+    }
+
+    fn store_label(&mut self, label: ast::Path, src: ir::Local, span: Span) {
+        self.stmts.push(ir::Statement {
+            span,
+            kind: ir::StatementKind::StoreLabel(label, src),
         });
     }
 }

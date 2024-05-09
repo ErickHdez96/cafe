@@ -35,8 +35,8 @@ fn id_multiple_instantiations() {
           (define _ (id #t))
           (define _ (id #\a))",
         expect![[r#"
-            id: (∀ '(a) (-> a a))
-            _: char"#]],
+            _: char
+            id: (∀ '(a) (-> a a))"#]],
         expect![[r#"
             {body 0:0..153
               {import (rnrs expander core ())@0:0..29}

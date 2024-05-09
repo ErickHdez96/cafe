@@ -23,7 +23,9 @@ fn check(input: &str, expected_bindings: Expect, expected_mod: Expect) {
     let mut out = String::new();
 
     let len = module.types.as_ref().unwrap().iter().len();
-    for (i, (name, ty)) in module.types.as_ref().unwrap().iter().enumerate() {
+    let mut types = module.types.as_ref().unwrap().iter().collect::<Vec<_>>();
+    types.sort_by_key(|(n, _)| n.resolve());
+    for (i, (name, ty)) in types.into_iter().enumerate() {
         out.push_str(&format!(
             "{name}: {:#?}{}",
             ty.with_arena(&interner.types),

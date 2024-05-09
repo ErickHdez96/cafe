@@ -61,11 +61,25 @@ impl<'a> Tester<'a> {
     pub fn test_expand_str(&mut self) -> ExpanderResultMod {
         self.assert_interner();
         self.assert_libs();
-        test_expand_str_with_libs(
-            self.input,
-            self.libs.as_ref().unwrap(),
-            self.interner.as_mut().unwrap(),
-        )
+        let input = self.input;
+        let interner = self.interner.as_mut().unwrap();
+        let libs = self.libs.as_ref().unwrap();
+
+        let res = test_parse_str(input);
+        let env = rnrs_env(interner);
+
+        let res = expand_module_with_config(
+            res.root,
+            ExpanderConfig::default()
+                .language(self.language)
+                .import(&|mid| libs.import(mid))
+                .register(&|mid, mod_| libs.define(mid, mod_))
+                .file_id(res.file_id)
+                .base_env(&env),
+        );
+
+        assert_eq!(res.diagnostics, vec![]);
+        res
     }
 }
 
@@ -81,11 +95,6 @@ pub fn test_parse_str(input: &str) -> ParseResult {
     let res = parse_str(input);
     assert_eq!(res.diagnostics, vec![]);
     res
-}
-
-pub fn test_expand_str(input: &str, interner: &mut Interner) -> ExpanderResultMod {
-    let libs = Libs::new(interner);
-    test_expand_str_with_libs(input, &libs, interner)
 }
 
 pub fn typecheck_id(libs: &Libs, mid: ast::ModId, interner: &mut Interner) {

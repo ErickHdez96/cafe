@@ -336,6 +336,7 @@ impl<'tyc> Codegen<'tyc> {
             ir::StatementKind::Store(_, _) => todo!(),
             ir::StatementKind::StoreAI(_, _, _) => todo!(),
             ir::StatementKind::StoreAO(_, _, _) => todo!(),
+            ir::StatementKind::StoreLabel(_, _) => todo!(),
             ir::StatementKind::LoadLabel(dst, lbl) => {
                 let reg = self.get_register_for_local(*dst);
                 self.i_load_label(reg, lbl, stmt.span);

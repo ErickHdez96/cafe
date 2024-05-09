@@ -358,6 +358,13 @@ impl fmt::Debug for Statement {
                 StatementKind::Store(_, _) => todo!(),
                 StatementKind::StoreAI(_, _, _) => todo!(),
                 StatementKind::StoreAO(_, _, _) => todo!(),
+                StatementKind::StoreLabel(label, src) => {
+                    write!(
+                        f,
+                        "{padding}(store-label |{label:#?}| {src} ({}))",
+                        self.span,
+                    )
+                }
             }
         } else {
             f.debug_struct("Statement")
@@ -395,6 +402,8 @@ pub enum StatementKind {
     StoreAI(Local, Constant, Local),
     /// storeAO _0, _1 = _2 ; memory[_0 + _1] = _2
     StoreAO(Local, Local, Local),
+    /// store @_0, _1 ; memory[@_0] = _1
+    StoreLabel(Path, Local),
 
     /// loadLabel _0 = address of label
     LoadLabel(Local, Path),

@@ -472,10 +472,7 @@ impl Language {
 mod tests {
     use expect_test::{expect, Expect};
 
-    use crate::{
-        interner::Interner,
-        test::{test_expand_str, Tester},
-    };
+    use crate::{interner::Interner, test::Tester};
 
     use super::*;
 
