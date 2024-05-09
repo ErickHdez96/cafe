@@ -70,7 +70,7 @@ impl Diagnostic {
         format!("{}: {}", level(&self.level), self.message)
     }
 
-    fn complex_to_string(&self, c: &Compiler, atty: bool) -> String {
+    fn complex_to_string<I>(&self, c: &Compiler<I>, atty: bool) -> String {
         let level = self.level.style().atty(atty).finish();
         let file = c
             .file(self.span.file_id())
@@ -129,7 +129,7 @@ impl Diagnostic {
         out
     }
 
-    pub fn to_string(&self, c: &Compiler, atty: bool) -> String {
+    pub fn to_string<I>(&self, c: &Compiler<I>, atty: bool) -> String {
         if self.is_simple() {
             self.simple_to_string(atty)
         } else {
@@ -247,12 +247,12 @@ impl DiagnosticBuilder {
     }
 }
 
-pub fn emit_diagnostics(c: &Compiler, diagnostics: &[Diagnostic]) {
+pub fn emit_diagnostics<I>(c: &Compiler<I>, diagnostics: &[Diagnostic]) {
     for d in diagnostics {
         emit_diagnostic(c, d);
     }
 }
 
-pub fn emit_diagnostic(c: &Compiler, d: &Diagnostic) {
+pub fn emit_diagnostic<I>(c: &Compiler<I>, d: &Diagnostic) {
     eprintln!("{}", d.to_string(c, true));
 }

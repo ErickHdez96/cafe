@@ -1,7 +1,7 @@
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use crate::{
-    asm,
+    asm::{self, ISA},
     codegen::codegen,
     config::Language,
     diagnostics::Diagnostic,
@@ -178,8 +178,8 @@ pub fn test_lower_str(input: &str, interner: &mut Interner) -> ir::Package {
     )
 }
 
-pub fn test_codegen_str(input: &str, interner: &mut Interner) -> asm::Insts {
-    codegen(test_lower_str(input, interner), &mut interner.types)
+pub fn test_codegen_str<I: ISA>(input: &str, isa: &I, interner: &mut Interner) -> asm::Insts {
+    codegen(test_lower_str(input, interner), isa, &mut interner.types)
 }
 
 #[derive(Debug)]

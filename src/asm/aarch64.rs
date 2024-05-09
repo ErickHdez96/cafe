@@ -11,47 +11,7 @@ use crate::{
     utils::mangle_symbol,
 };
 
-use super::{Inst, Register, TyArch, ISA};
-
-impl TyArch for ty::TyK {
-    fn size(&self) -> usize {
-        match self {
-            Self::Boolean => 1,
-            Self::Char => 4,
-            Self::String => todo!(),
-            Self::Number(n) => match n {
-                ty::NumberTy::I64 => ISA::POINTER_SIZE,
-            },
-            Self::Lambda { .. } => ISA::POINTER_SIZE,
-            Self::None => todo!(),
-            Self::Null => ISA::POINTER_SIZE,
-            Self::Array(_) => ISA::POINTER_SIZE,
-            Self::Void => 0,
-            Self::Symbol => todo!(),
-            Self::Var(_) => todo!(),
-            Self::Error => todo!(),
-        }
-    }
-
-    fn alignment(&self) -> usize {
-        match self {
-            Self::Boolean => 1,
-            Self::Char => 4,
-            Self::Number(n) => match n {
-                ty::NumberTy::I64 => ISA::POINTER_SIZE,
-            },
-            Self::Lambda { .. } => ISA::POINTER_SIZE,
-            Self::Array(_) => ISA::POINTER_SIZE,
-            Self::String => todo!(),
-            Self::None => todo!(),
-            Self::Null => todo!(),
-            Self::Void => 1,
-            Self::Symbol => todo!(),
-            Self::Var(_) => todo!(),
-            Self::Error => todo!(),
-        }
-    }
-}
+use super::{Inst, Register, ISA};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum Direction {
@@ -338,21 +298,26 @@ impl Display for Register {
     }
 }
 
-impl ISA {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Aarch64;
+
+impl Aarch64 {}
+
+impl ISA for Aarch64 {
     // Size in bytes of a pointer.
-    pub const POINTER_SIZE: usize = 8;
+    const POINTER_SIZE: usize = 8;
 
     /// Calculates the body's stack size and the local's stack offsets and sizes.
-    pub fn process_body(body: &mut ir::Body, arena: &Arena<TyK>) {
+    fn process_body(&self, body: &mut ir::Body, arena: &Arena<TyK>) {
         let mut stack_size = 0u32;
 
-        body.locals[0].size = arena.get(body.locals[0].ty.value()).size() as u32;
+        body.locals[0].size = self.ty_size(arena.get(body.locals[0].ty.value())) as u32;
         for loc in body.locals.iter_mut().skip(1) {
             let ty = arena.get(loc.ty.value());
-            loc.stack_offset = align(stack_size as usize, ty.alignment())
+            loc.stack_offset = align(stack_size as usize, self.ty_alignment(ty))
                 .try_into()
                 .unwrap();
-            loc.size = ty.size().try_into().unwrap();
+            loc.size = self.ty_size(ty).try_into().unwrap();
             stack_size = loc.stack_offset + loc.size;
         }
         // The stack must be aligned to 16 bytes.
@@ -378,7 +343,7 @@ impl ISA {
     }
 
     /// Generate the prologue to the function.
-    pub fn proc_begin(body: &ir::Body) -> Vec<Inst> {
+    fn proc_begin(&self, body: &ir::Body) -> Vec<Inst> {
         let fp_stack_offset = TryInto::<i16>::try_into(body.stack_size - 16).unwrap();
         assert!(
             (-512..=504).contains(&fp_stack_offset),
@@ -443,7 +408,7 @@ impl ISA {
         prologue
     }
 
-    pub fn proc_end(body: &ir::Body) -> Vec<Inst> {
+    fn proc_end(&self, body: &ir::Body) -> Vec<Inst> {
         let fp_stack_offset = TryInto::<i16>::try_into(body.stack_size - 16).unwrap();
 
         vec![
@@ -468,23 +433,61 @@ impl ISA {
             ),
         ]
     }
-}
 
-impl ISA {
-    /// Required runtime to run a taco program.
+    fn ty_size(&self, ty: &TyK) -> usize {
+        match ty {
+            TyK::Boolean => 1,
+            TyK::Char => 4,
+            TyK::String => todo!(),
+            TyK::Number(n) => match n {
+                ty::NumberTy::I64 => Self::POINTER_SIZE,
+            },
+            TyK::Lambda { .. } => Self::POINTER_SIZE,
+            TyK::None => todo!(),
+            TyK::Null => Self::POINTER_SIZE,
+            TyK::Array(_) => Self::POINTER_SIZE,
+            TyK::Void => 0,
+            TyK::Symbol => todo!(),
+            TyK::Var(_) => todo!(),
+            TyK::Error => todo!(),
+        }
+    }
+
+    fn ty_alignment(&self, ty: &TyK) -> usize {
+        match ty {
+            TyK::Boolean => 1,
+            TyK::Char => 4,
+            TyK::Number(n) => match n {
+                ty::NumberTy::I64 => Self::POINTER_SIZE,
+            },
+            TyK::Lambda { .. } => Self::POINTER_SIZE,
+            TyK::Array(_) => Self::POINTER_SIZE,
+            TyK::String => todo!(),
+            TyK::None => todo!(),
+            TyK::Null => todo!(),
+            TyK::Void => 1,
+            TyK::Symbol => todo!(),
+            TyK::Var(_) => todo!(),
+            TyK::Error => todo!(),
+        }
+    }
+
+    /// Required runtime to run a program.
     ///
     /// ### Includes
     ///
     /// * `_start` entry point to set up stack and terminate the program correctly.
     /// * primitive functions
-    pub fn runtime() -> Vec<Inst> {
+    fn runtime(&self) -> Vec<Inst> {
         let mut runtime = vec![];
         runtime.append(&mut Self::entry_point());
         runtime.append(&mut Self::add_primitive());
         runtime.append(&mut Self::write_char_primitive());
         runtime
     }
+}
 
+impl Aarch64 {
     /// x0 = x0 + x1
     fn add_primitive() -> Vec<Inst> {
         vec![
@@ -498,7 +501,7 @@ impl ISA {
 }
 
 #[cfg(target_os = "macos")]
-impl ISA {
+impl Aarch64 {
     fn entry_point() -> Vec<Inst> {
         // .align 4
         // .global _main

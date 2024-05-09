@@ -5,7 +5,7 @@ pub use aarch64::*;
 
 use core::fmt;
 
-use crate::span::Span;
+use crate::{arena::Arena, ir, span::Span, ty};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Insts(pub Vec<Inst>);
@@ -37,15 +37,17 @@ impl Inst {
     }
 }
 
-pub trait TyArch {
-    /// Returns the size of the type in bytes.
-    fn size(&self) -> usize;
-    /// Returns the ABI-required minimum alignment of the type in bytes.
-    fn alignment(&self) -> usize;
-}
-
 #[allow(clippy::upper_case_acronyms)]
-pub struct ISA;
+pub trait ISA {
+    const POINTER_SIZE: usize;
+
+    fn process_body(&self, body: &mut ir::Body, arena: &Arena<ty::TyK>);
+    fn proc_begin(&self, body: &ir::Body) -> Vec<Inst>;
+    fn proc_end(&self, body: &ir::Body) -> Vec<Inst>;
+    fn runtime(&self) -> Vec<Inst>;
+    fn ty_size(&self, ty: &ty::TyK) -> usize;
+    fn ty_alignment(&self, ty: &ty::TyK) -> usize;
+}
 
 /// A Register in an ISA. The lower 6 bits represent the register. The upper 2 bits are used
 /// to represent its width.

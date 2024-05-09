@@ -2,7 +2,8 @@
 use std::{cell::RefCell, collections::HashMap, path, rc::Rc};
 
 use crate::{
-    asm, codegen,
+    asm::{self, ISA},
+    codegen,
     config::CompilerConfig,
     diagnostics::Diagnostic,
     env::Env,
@@ -26,22 +27,23 @@ use crate::{
 pub type Res<T> = Result<T, Diagnostic>;
 
 #[derive(Debug)]
-pub struct Compiler {
+pub struct Compiler<I> {
     pub config: CompilerConfig,
     store: RefCell<CompilerStore>,
     interner: Interner,
     env: Env<'static, Symbol, Binding>,
+    isa: I,
     diagnostics: RefCell<Vec<Diagnostic>>,
 }
 
-impl Default for Compiler {
+impl Default for Compiler<asm::Aarch64> {
     fn default() -> Self {
-        Self::new()
+        Self::new(asm::Aarch64)
     }
 }
 
-impl Compiler {
-    pub fn new() -> Self {
+impl<I> Compiler<I> {
+    pub fn new(isa: I) -> Self {
         let mut interner = Interner::default();
         let intrinsics = intrinsics_interface(&mut interner);
         let s = Self {
@@ -49,6 +51,7 @@ impl Compiler {
             store: RefCell::default(),
             interner,
             env: intrinsics_env(),
+            isa,
             diagnostics: RefCell::default(),
         };
         s.feed_module(core_expander_interface());
@@ -289,23 +292,6 @@ impl Compiler {
         )
     }
 
-    fn codegen(&mut self, ir: ir::Package) -> asm::Insts {
-        codegen::codegen(ir, &self.interner.types)
-    }
-
-    pub fn compile_file(&mut self, path: impl AsRef<path::Path>) -> Res<asm::Insts> {
-        let path = path.as_ref();
-        let mid = ast::ModuleName {
-            paths: vec![path.file_name().unwrap().to_string_lossy().as_ref().into()],
-            versions: vec![],
-        }
-        .intern();
-        self.feed_file(mid, path)?;
-        self.run_typecheck_module(mid)?;
-        let pkg = self.lower_module(mid);
-        Ok(self.codegen(pkg))
-    }
-
     fn get_mod(&self, mid: ast::ModId) -> Option<Rc<ast::Module>> {
         self.store.borrow().get_mod(mid)
     }
@@ -320,6 +306,28 @@ impl Compiler {
 
     fn get_module_file(&self, mid: ast::ModId) -> Option<FileId> {
         self.store.borrow().get_module_file(mid)
+    }
+}
+
+impl<I> Compiler<I>
+where
+    I: ISA,
+{
+    fn codegen(&mut self, ir: ir::Package) -> asm::Insts {
+        codegen::codegen(ir, &self.isa, &self.interner.types)
+    }
+
+    pub fn compile_file(&mut self, path: impl AsRef<path::Path>) -> Res<asm::Insts> {
+        let path = path.as_ref();
+        let mid = ast::ModuleName {
+            paths: vec![path.file_name().unwrap().to_string_lossy().as_ref().into()],
+            versions: vec![],
+        }
+        .intern();
+        self.feed_file(mid, path)?;
+        self.run_typecheck_module(mid)?;
+        let pkg = self.lower_module(mid);
+        Ok(self.codegen(pkg))
     }
 }
 

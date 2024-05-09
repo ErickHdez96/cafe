@@ -9,11 +9,14 @@ use crate::{
     utils::mangle_symbol,
 };
 
-pub fn codegen(ir: ir::Package, types: &Arena<TyK>) -> Insts {
-    Insts(Codegen::new(types).generate(ir))
+pub fn codegen<I>(ir: ir::Package, isa: &I, types: &Arena<TyK>) -> Insts
+where
+    I: ISA,
+{
+    Insts(Codegen::new(isa, types).generate(ir))
 }
 
-struct Codegen<'tyc> {
+struct Codegen<'tyc, 'isa, I> {
     output: Vec<Inst>,
     /// The offset, size in the stack where the locals are stored (if at all).
     locals_stack: Vec<(u32, u32)>,
@@ -22,13 +25,17 @@ struct Codegen<'tyc> {
     temp_offset: usize,
     arg_registers: &'static [Register],
     arg_offset: usize,
+    isa: &'isa I,
     types: &'tyc Arena<TyK>,
 }
 
-impl<'tyc> Codegen<'tyc> {
+impl<'tyc, 'isa, I> Codegen<'tyc, 'isa, I>
+where
+    I: ISA,
+{
     const FUNCTION_ALIGNMENT: u8 = 4;
 
-    fn new(types: &'tyc Arena<TyK>) -> Self {
+    fn new(isa: &'isa I, types: &'tyc Arena<TyK>) -> Self {
         Self {
             output: vec![],
             locals_stack: vec![],
@@ -36,6 +43,7 @@ impl<'tyc> Codegen<'tyc> {
             temp_offset: 0,
             arg_registers: &Register::PARAM_REGISTERS,
             arg_offset: 0,
+            isa,
             types,
         }
     }
@@ -251,13 +259,13 @@ impl<'tyc> Codegen<'tyc> {
         self.emit(Inst::pseudo_global(label));
         self.emit(Inst::pseudo_label(label));
 
-        ISA::process_body(&mut body, self.types);
+        self.isa.process_body(&mut body, self.types);
         self.locals_stack = body
             .locals
             .iter()
             .map(|l| (l.stack_offset, l.size))
             .collect();
-        self.add_insts(ISA::proc_begin(&body));
+        self.add_insts(self.isa.proc_begin(&body));
 
         for bb in &body.basic_blocks {
             self.gen_basic_block(bb, &body);
@@ -420,7 +428,7 @@ impl<'tyc> Codegen<'tyc> {
                 term.span,
             )),
             ir::TerminatorKind::Return => {
-                self.add_insts(ISA::proc_end(body));
+                self.add_insts(self.isa.proc_end(body));
                 self.emit(Inst::ret(term.span));
             }
             ir::TerminatorKind::Cond {
@@ -467,7 +475,7 @@ impl<'tyc> Codegen<'tyc> {
 
     fn get_native_register(&mut self) -> Register {
         self.next_temp_register()
-            .with_size(ISA::POINTER_SIZE.try_into().unwrap())
+            .with_size(I::POINTER_SIZE.try_into().unwrap())
     }
 
     fn load_local(&mut self, local: ir::Local, span: Span) -> Register {
@@ -520,11 +528,11 @@ pub fn canonicalize_symbol(path: &ast::Path) -> Symbol {
 
 #[cfg(test)]
 mod tests {
-    use crate::{interner::Interner, test::test_codegen_str};
+    use crate::{asm::Aarch64, interner::Interner, test::test_codegen_str};
     use expect_test::{expect, Expect};
 
     fn check(input: &str, expected: Expect) {
-        let res = test_codegen_str(input, &mut Interner::default());
+        let res = test_codegen_str(input, &Aarch64, &mut Interner::default());
         expected.assert_eq(&res.to_string());
     }
 
