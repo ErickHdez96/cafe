@@ -7,4 +7,5 @@ authors = ["Erick Hernandez Curiel <erick@hernandezcuriel.dev>"]
 [dependencies]
 
 [dev-dependencies]
+anyhow = "1.0.83"
 expect-test = "1"

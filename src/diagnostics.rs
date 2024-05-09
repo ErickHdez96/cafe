@@ -138,6 +138,29 @@ impl Diagnostic {
     }
 }
 
+impl fmt::Display for Diagnostic {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "[{}] {} - {}{}",
+            self.level,
+            self.span,
+            self.message,
+            if self.related.is_empty() {
+                String::new()
+            } else {
+                self.related
+                    .iter()
+                    .map(|d| format!("[{d}]"))
+                    .collect::<Vec<_>>()
+                    .join(" - ")
+            }
+        )
+    }
+}
+
+impl std::error::Error for Diagnostic {}
+
 pub struct DiagnosticBuilder {
     pub msg: Option<String>,
     pub level: DiagnosticLevel,

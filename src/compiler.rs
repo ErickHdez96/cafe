@@ -2,6 +2,7 @@
 use std::{cell::RefCell, collections::HashMap, path, rc::Rc};
 
 use crate::{
+    asm, codegen,
     config::CompilerConfig,
     diagnostics::Diagnostic,
     env::Env,
@@ -11,10 +12,11 @@ use crate::{
     },
     file::{FileId, SourceFile},
     interner::Interner,
+    ir, lower_ast,
     rnrs::{core_expander_interface, intrinsics_interface},
     symbol::Symbol,
     syntax::{
-        ast::{ModId, Module, ModuleInterface, ModuleName},
+        ast,
         cst::Cst,
         parser::{parse_source_file, ParseResult},
     },
@@ -54,7 +56,11 @@ impl Compiler {
         s
     }
 
-    fn import_module_id(&self, mid: ModId) -> Res<Rc<ModuleInterface>> {
+    pub const fn interner(&self) -> &Interner {
+        &self.interner
+    }
+
+    fn import_module_id(&self, mid: ast::ModId) -> Res<Rc<ast::ModuleInterface>> {
         match self.get_mod_interface(mid) {
             Some(m) => Ok(m),
             None => {
@@ -66,7 +72,7 @@ impl Compiler {
         }
     }
 
-    fn register_module(&self, mid: ModId, module: Module) {
+    fn register_module(&self, mid: ast::ModId, module: ast::Module) {
         self.store
             .borrow_mut()
             .module_interfaces
@@ -74,7 +80,7 @@ impl Compiler {
         self.store.borrow_mut().modules.insert(mid, Rc::new(module));
     }
 
-    fn resolve_module_name(&self, mid: ModId) -> Res<FileId> {
+    fn resolve_module_name(&self, mid: ast::ModId) -> Res<FileId> {
         match self.get_module_file(mid) {
             Some(fid) => Ok(fid),
             None => {
@@ -102,7 +108,7 @@ impl Compiler {
         }
     }
 
-    fn module_deps(&self, mid: ModId) -> Vec<ModId> {
+    fn module_deps(&self, mid: ast::ModId) -> Vec<ast::ModId> {
         self.get_mod_interface(mid)
             .map(|i| i.dependencies.clone())
             .unwrap()
@@ -112,7 +118,16 @@ impl Compiler {
         self.get_file(file_id)
     }
 
-    pub fn feed_file(&self, mid: ModId, path: impl AsRef<path::Path>) -> Res<FileId> {
+    pub fn add_source(&self, path: impl AsRef<path::Path>, modname: &[&str]) -> Res<FileId> {
+        let mid = ast::ModuleName {
+            paths: modname.as_ref().iter().map(Symbol::intern).collect(),
+            versions: vec![],
+        }
+        .intern();
+        self.feed_file(mid, path)
+    }
+
+    pub fn feed_file(&self, mid: ast::ModId, path: impl AsRef<path::Path>) -> Res<FileId> {
         let path = path.as_ref();
         let contents = match std::fs::read_to_string(path) {
             Ok(c) => c,
@@ -127,7 +142,7 @@ impl Compiler {
 
     pub fn feed_file_contents(
         &self,
-        mid: ModId,
+        mid: ast::ModId,
         path: impl AsRef<path::Path>,
         contents: impl Into<String>,
     ) -> Res<FileId> {
@@ -139,7 +154,7 @@ impl Compiler {
         Ok(fid)
     }
 
-    pub fn feed_module(&self, mod_interface: ModuleInterface) {
+    pub fn feed_module(&self, mod_interface: ast::ModuleInterface) {
         self.store
             .borrow_mut()
             .module_interfaces
@@ -165,7 +180,7 @@ impl Compiler {
         ))
     }
 
-    pub fn pass_typecheck(&mut self, mid: ModId) {
+    pub fn pass_typecheck(&mut self, mid: ast::ModId) {
         let mut store = self.store.borrow_mut();
         let mod_ =
             Rc::get_mut(store.modules.get_mut(&mid).unwrap()).expect("module should be unique");
@@ -186,7 +201,7 @@ impl Compiler {
         self.diagnostics.borrow_mut().extend(diags);
     }
 
-    pub fn expand_module(&self, mid: ModId) -> Res<Rc<Module>> {
+    pub fn expand_module(&self, mid: ast::ModId) -> Res<Rc<ast::Module>> {
         if let Some(mod_) = self.get_mod(mid) {
             return Ok(mod_);
         }
@@ -205,7 +220,7 @@ impl Compiler {
                 let mid = if self.get_mod(mid).is_some() {
                     let mut paths = mid.resolve().paths.clone();
                     paths.push(Symbol::from("#script"));
-                    ModuleName::from_strings(paths)
+                    ast::ModuleName::from_strings(paths)
                 } else {
                     mid
                 };
@@ -222,7 +237,7 @@ impl Compiler {
         Ok(self.get_mod(mid).unwrap())
     }
 
-    fn run_typecheck_module(&mut self, mid: ModId) -> Res<()> {
+    fn run_typecheck_module(&mut self, mid: ast::ModId) -> Res<()> {
         if let Some(mod_) = self.get_mod(mid) {
             if mod_.types.is_some() {
                 return Ok(());
@@ -257,40 +272,45 @@ impl Compiler {
         Ok(())
     }
 
-    pub fn typecheck_module(&mut self, mid: ModId) -> Res<Rc<Module>> {
+    pub fn typecheck_module(&mut self, mid: ast::ModId) -> Res<Rc<ast::Module>> {
         self.run_typecheck_module(mid)?;
         self.get_mod(mid).ok_or_else(|| panic!("expected module"))
     }
 
-    pub fn compile_script(&mut self, path: impl AsRef<path::Path>) -> Res<Rc<Module>> {
-        let mid = ModuleName::script();
-        self.feed_file(mid, path.as_ref())?;
-        self.typecheck_module(mid)
-        //let m = self.expand_module(mid);
-
-        //for dep in self.module_deps(mid) {
-        //    let env = self.pass_typecheck(
-        //        &self.store.borrow().get_mod(dep).unwrap()
-        //    );
-        //    Rc::get_mut(
-        //        self.store
-        //            .borrow_mut()
-        //            .module_interfaces
-        //            .get_mut(&dep)
-        //            .unwrap(),
-        //    )
-        //    .unwrap()
-        //    .types = Some(env);
-        //}
-
-        //m
+    fn lower_module(&mut self, mid: ast::ModId) -> ir::Package {
+        lower_ast::lower_ast(
+            &self.get_mod(mid).expect("module"),
+            &|mid| {
+                self.get_mod(mid)
+                    .map(|m| m.into())
+                    .unwrap_or_else(|| self.import_module_id(mid).unwrap().into())
+            },
+            &self.interner,
+        )
     }
 
-    fn get_mod(&self, mid: ModId) -> Option<Rc<Module>> {
+    fn codegen(&mut self, ir: ir::Package) -> Vec<asm::Inst> {
+        codegen::codegen(ir, &self.interner.types)
+    }
+
+    pub fn compile_file(&mut self, path: impl AsRef<path::Path>) -> Res<Vec<asm::Inst>> {
+        let path = path.as_ref();
+        let mid = ast::ModuleName {
+            paths: vec![path.file_name().unwrap().to_string_lossy().as_ref().into()],
+            versions: vec![],
+        }
+        .intern();
+        self.feed_file(mid, path)?;
+        self.run_typecheck_module(mid)?;
+        let pkg = self.lower_module(mid);
+        Ok(self.codegen(pkg))
+    }
+
+    fn get_mod(&self, mid: ast::ModId) -> Option<Rc<ast::Module>> {
         self.store.borrow().get_mod(mid)
     }
 
-    fn get_mod_interface(&self, mid: ModId) -> Option<Rc<ModuleInterface>> {
+    fn get_mod_interface(&self, mid: ast::ModId) -> Option<Rc<ast::ModuleInterface>> {
         self.store.borrow().get_mod_interface(mid)
     }
 
@@ -298,7 +318,7 @@ impl Compiler {
         self.store.borrow().get_file(fid)
     }
 
-    fn get_module_file(&self, mid: ModId) -> Option<FileId> {
+    fn get_module_file(&self, mid: ast::ModId) -> Option<FileId> {
         self.store.borrow().get_module_file(mid)
     }
 }
@@ -306,9 +326,9 @@ impl Compiler {
 #[derive(Debug, Default)]
 struct CompilerStore {
     filemap: HashMap<FileId, Rc<SourceFile>>,
-    module_file: HashMap<ModId, FileId>,
-    modules: HashMap<ModId, Rc<Module>>,
-    module_interfaces: HashMap<ModId, Rc<ModuleInterface>>,
+    module_file: HashMap<ast::ModId, FileId>,
+    modules: HashMap<ast::ModId, Rc<ast::Module>>,
+    module_interfaces: HashMap<ast::ModId, Rc<ast::ModuleInterface>>,
 }
 
 impl CompilerStore {
@@ -316,15 +336,15 @@ impl CompilerStore {
         self.filemap.get(&fid).map(Rc::clone)
     }
 
-    fn get_module_file(&self, mid: ModId) -> Option<FileId> {
+    fn get_module_file(&self, mid: ast::ModId) -> Option<FileId> {
         self.module_file.get(&mid).copied()
     }
 
-    fn get_mod(&self, mid: ModId) -> Option<Rc<Module>> {
+    fn get_mod(&self, mid: ast::ModId) -> Option<Rc<ast::Module>> {
         self.modules.get(&mid).map(Rc::clone)
     }
 
-    fn get_mod_interface(&self, mid: ModId) -> Option<Rc<ModuleInterface>> {
+    fn get_mod_interface(&self, mid: ast::ModId) -> Option<Rc<ast::ModuleInterface>> {
         self.module_interfaces.get(&mid).map(Rc::clone)
     }
 }

@@ -168,25 +168,16 @@ pub fn test_lower_str(input: &str, interner: &mut Interner) -> ir::Package {
     libs.define(mid, res.module);
     typecheck_id(&libs, mid, interner);
 
-    let intrinsics_mid = ast::ModuleName::from_strings(vec!["rnrs", "intrinsics"]);
     let store = libs.modules.borrow();
     let module = store.get(&mid).unwrap();
 
-    match lower_ast(
+    lower_ast(
         &module,
-        intrinsics_mid,
-        &|mid| libs.import_mod(mid),
+        &|mid| libs.import_mod(mid).unwrap().into(),
         &interner,
-    ) {
-        Ok(p) => p,
-        Err(d) => {
-            assert_eq!(Vec::<Diagnostic>::new(), d);
-            unreachable!();
-        }
-    }
+    )
 }
 
-#[allow(dead_code)]
 pub fn test_codegen_str(input: &str, interner: &mut Interner) -> Vec<asm::Inst> {
     codegen(test_lower_str(input, interner), &mut interner.types)
 }

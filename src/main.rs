@@ -20,9 +20,9 @@ fn main() {
 
     compiler.config = config;
 
-    match compiler.compile_script(input) {
-        Ok(module) => {
-            println!("{:#?}", module);
+    match compiler.compile_file(input) {
+        Ok(insts) => {
+            println!("{:#?}", insts);
             emit_diagnostics(&compiler, &compiler.take_diagnostics());
         }
         Err(_) => todo!(),

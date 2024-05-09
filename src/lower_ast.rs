@@ -1,7 +1,6 @@
 use std::rc::Rc;
 
 use crate::{
-    diagnostics::Diagnostic,
     env::Env,
     interner::Interner,
     ir,
@@ -34,18 +33,32 @@ impl From<ast::Path> for Place {
     }
 }
 
+pub enum ModuleOrInterface {
+    Mod(Rc<ast::Module>),
+    Int(Rc<ast::ModuleInterface>),
+}
+
+impl From<Rc<ast::Module>> for ModuleOrInterface {
+    fn from(value: Rc<ast::Module>) -> Self {
+        Self::Mod(value)
+    }
+}
+
+impl From<Rc<ast::ModuleInterface>> for ModuleOrInterface {
+    fn from(value: Rc<ast::ModuleInterface>) -> Self {
+        Self::Int(value)
+    }
+}
+
 pub fn lower_ast(
     mod_: &ast::Module,
     // TODO: Improve this
-    intrinsics_mid: ast::ModId,
-    import: &dyn Fn(ast::ModId) -> Result<Rc<ast::Module>, Diagnostic>,
+    import: &dyn Fn(ast::ModId) -> ModuleOrInterface,
     interner: &Interner,
-) -> Result<ir::Package, Vec<Diagnostic>> {
+) -> ir::Package {
     let mut lowerer = Lowerer {
         import,
-        intrinsics_mid,
         interner,
-        diagnostics: vec![],
         current_module: mod_.id,
         current_path: vec![],
         body_builder: BodyBuilder::default(),
@@ -57,20 +70,14 @@ pub fn lower_ast(
     };
     lowerer.lower_ast(mod_);
 
-    if lowerer.diagnostics.iter().any(|d| d.level.is_error()) {
-        Err(std::mem::take(&mut lowerer.diagnostics))
-    } else {
-        Ok(ir::Package {
-            bodies: std::mem::take(&mut lowerer.bodies),
-        })
+    ir::Package {
+        bodies: std::mem::take(&mut lowerer.bodies),
     }
 }
 
 struct Lowerer<'i> {
-    import: &'i dyn Fn(ast::ModId) -> Result<Rc<ast::Module>, Diagnostic>,
-    intrinsics_mid: ast::ModId,
+    import: &'i dyn Fn(ast::ModId) -> ModuleOrInterface,
     interner: &'i Interner,
-    diagnostics: Vec<Diagnostic>,
     current_module: ast::ModId,
     current_path: Vec<Symbol>,
     body_builder: BodyBuilder,
@@ -107,12 +114,11 @@ impl Lowerer<'_> {
 
         for dep in &mod_.dependencies {
             match (self.import)(*dep) {
-                Ok(m) => {
+                ModuleOrInterface::Mod(m) => {
                     self.lower_ast(&m);
                 }
-                Err(d) => {
-                    self.diagnostics.push(d);
-                    return;
+                ModuleOrInterface::Int(i) => {
+                    self.lower_mod_interface(&i);
                 }
             }
         }
@@ -128,6 +134,27 @@ impl Lowerer<'_> {
             exported.insert(key, place);
         }
         self.exported_bindings.insert(mod_.id, exported);
+    }
+
+    fn lower_mod_interface(&mut self, int: &ast::ModuleInterface) {
+        self.current_module = int.id;
+        if self.lowered_mids.contains(&int.id) {
+            return;
+        }
+
+        // Intrinsic modules have void as their bodies
+        let mut exported = Env::default();
+        for key in int.bindings.keys().copied() {
+            exported.insert(
+                key,
+                Place::Global(ast::Path {
+                    span: int.span,
+                    module: int.id,
+                    value: key,
+                }),
+            );
+        }
+        self.exported_bindings.insert(int.id, exported);
     }
 
     fn lower_mod(&mut self, mod_: &ast::Module) -> PEnv<'static> {
@@ -433,30 +460,7 @@ impl Lowerer<'_> {
         env: &PEnv,
     ) -> ir::Local {
         let retl = self.get_or_alloc_local(local, span, ty);
-        let cl = self.lower_expr(cond, None, None, env);
-        let cond_local = if self
-            .body_builder
-            .get_local(cl)
-            .ty
-            .with_arena(&self.interner.types)
-            .is_boolean()
-        {
-            cl
-        } else {
-            self.body_builder.arg(cl, cond.span);
-            let cond_local =
-                self.get_or_alloc_local(None, span, self.interner.builtins.types.boolean);
-            self.body_builder.call_label(
-                cond_local,
-                ast::Path {
-                    span,
-                    module: self.intrinsics_mid,
-                    value: "truthy?".into(),
-                },
-                cond.span,
-            );
-            cond_local
-        };
+        let cond_local = self.lower_expr(cond, None, None, env);
 
         let cidx = self
             .body_builder
@@ -701,13 +705,6 @@ impl BodyBuilder {
         self.stmts.push(ir::Statement {
             span,
             kind: ir::StatementKind::Call(dst, func),
-        });
-    }
-
-    fn call_label(&mut self, dst: ir::Local, label: ast::Path, span: Span) {
-        self.stmts.push(ir::Statement {
-            span,
-            kind: ir::StatementKind::CallLabel(dst, label),
         });
     }
 
