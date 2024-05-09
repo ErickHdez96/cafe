@@ -481,7 +481,6 @@ impl ISA {
         let mut runtime = vec![];
         runtime.append(&mut Self::entry_point());
         runtime.append(&mut Self::add_primitive());
-        runtime.append(&mut Self::char_to_utf8());
         runtime.append(&mut Self::write_char_primitive());
         runtime
     }
@@ -494,126 +493,6 @@ impl ISA {
             Inst::pseudo_label("add".into()),
             Inst::new(Span::dummy(), String::from("\tadd x0, x0, x1")),
             Inst::new(Span::dummy(), String::from("\tret lr")),
-        ]
-    }
-
-    /// ```text
-    /// (: char->utf8 (-> char (ptr u8) (ptr usize) ())
-    /// (define (char->utf8 char buf size) ...)
-    ///
-    /// Converts char to utf8 bytes.
-    /// size contains the number of bytes used to encode the character (1-4).
-    /// buf contains the utf8 bytes
-    /// ```
-    fn char_to_utf8() -> Vec<Inst> {
-        vec![
-            Inst::pseudo_align(4),
-            Inst::pseudo_global("char_to_utf8".into()),
-            Inst::pseudo_label("char_to_utf8".into()),
-            Inst::new(
-                Span::dummy(),
-                String::from("\tcmp     w0, #127		// Can the character fit in 1 byte?"),
-            ),
-            Inst::new(Span::dummy(), String::from("\tb.hi    2f")),
-            Inst::new(Span::dummy(), String::from("\tmov     w8, #1")),
-            Inst::new(
-                Span::dummy(),
-                String::from(
-                    "\tstr     x8, [x2]		// char is in the ascii range and takes only 1 byte",
-                ),
-            ),
-            Inst::new(
-                Span::dummy(),
-                String::from("\tstrb    w0, [x1]		// buf[0] = c // and can be written as-is"),
-            ),
-            Inst::new(Span::dummy(), String::from("\tret")),
-            Inst::pseudo_label("2".into()),
-            Inst::new(
-                Span::dummy(),
-                String::from("\tcmp     w0, #2047		// Can the character fit in 2 bytes?"),
-            ),
-            Inst::new(Span::dummy(), String::from("\tb.hi    3f")),
-            Inst::new(Span::dummy(), String::from("\tlsr     w8, w0, #6")),
-            Inst::new(Span::dummy(), String::from("\tmov     w10, #0x80")),
-            Inst::new(Span::dummy(), String::from("\tmov     w9, #2")),
-            Inst::new(Span::dummy(), String::from("\tbfxil   w10, w0, #0, #6")),
-            Inst::new(
-                Span::dummy(),
-                String::from("\tstr     x9, [x2]		// char takes 2 bytes in utf8"),
-            ),
-            Inst::new(Span::dummy(), String::from("\torr     w8, w8, #0xc0")),
-            Inst::new(
-                Span::dummy(),
-                String::from("\tstrb    w8, [x1]		// buf[0] = (c >> 6) | 0xc0"),
-            ),
-            Inst::new(
-                Span::dummy(),
-                String::from("\tstrb    w10, [x1, #1]		// buf[1] = (c & 0x3f) | 0x80"),
-            ),
-            Inst::new(Span::dummy(), String::from("\tret")),
-            Inst::pseudo_label("3".into()),
-            Inst::new(Span::dummy(), String::from("\tlsr     w8, w0, #16")),
-            Inst::new(
-                Span::dummy(),
-                String::from(
-                    "\tcbnz    w8, 4f			// if char <= 0xFFFF, then it fits in 3 bytes (or less)",
-                ),
-            ),
-            Inst::new(Span::dummy(), String::from("\tlsr     w8, w0, #12")),
-            Inst::new(Span::dummy(), String::from("\tmov     w10, #0x80")),
-            Inst::new(Span::dummy(), String::from("\tmov     w11, #0x80")),
-            Inst::new(Span::dummy(), String::from("\tbfxil   w11, w0, #6, #6")),
-            Inst::new(Span::dummy(), String::from("\tbfxil   w10, w0, #0, #6")),
-            Inst::new(Span::dummy(), String::from("\tmov     w9, #3")),
-            Inst::new(Span::dummy(), String::from("\torr     w8, w8, #0xe0")),
-            Inst::new(
-                Span::dummy(),
-                String::from("\tstr     x9, [x2]		// char takes 3 bytes in tf8"),
-            ),
-            Inst::new(
-                Span::dummy(),
-                String::from("\tstrb    w8, [x1]		// buf[0] = (c >> 12) | 0xe0"),
-            ),
-            Inst::new(
-                Span::dummy(),
-                String::from("\tstrb    w11, [x1, #1]		// buf[1] = ((c >> 6) & 0x3f) | 0x80"),
-            ),
-            Inst::new(
-                Span::dummy(),
-                String::from("\tstrb    w10, [x1, #2]		// buf[2] = (c & 0x3f) | 0x80"),
-            ),
-            Inst::new(Span::dummy(), String::from("\tret")),
-            Inst::pseudo_label("4".into()),
-            Inst::new(Span::dummy(), String::from("\tmov     w9, #4")),
-            Inst::new(Span::dummy(), String::from("\tlsr     w8, w0, #18")),
-            Inst::new(Span::dummy(), String::from("\tmov     w10, #0x80")),
-            Inst::new(Span::dummy(), String::from("\tmov     w11, #0x80")),
-            Inst::new(
-                Span::dummy(),
-                String::from("\tstr     x9, [x2]		// char takes 4 bytes in utf8"),
-            ),
-            Inst::new(Span::dummy(), String::from("\tmov     w9, #0x80")),
-            Inst::new(Span::dummy(), String::from("\tbfxil   w10, w0, #12, #6")),
-            Inst::new(Span::dummy(), String::from("\tbfxil   w11, w0, #6, #6")),
-            Inst::new(Span::dummy(), String::from("\tbfxil   w9, w0, #0, #6")),
-            Inst::new(Span::dummy(), String::from("\torr     w8, w8, #0xf0")),
-            Inst::new(
-                Span::dummy(),
-                String::from("\tstrb    w8, [x1]		// buf[0] = (c >> 18) | 0xf0"),
-            ),
-            Inst::new(
-                Span::dummy(),
-                String::from("\tstrb    w10, [x1, #1]		// buf[1] = ((c >> 12) & 0x3f) | 0x80"),
-            ),
-            Inst::new(
-                Span::dummy(),
-                String::from("\tstrb    w11, [x1, #2]		// buf[2] = ((c >> 6) & 0x3f) | 0x80"),
-            ),
-            Inst::new(
-                Span::dummy(),
-                String::from("\tstrb    w9, [x1, #3]		// buf[3] = (c & 0x3f) | 0x80"),
-            ),
-            Inst::new(Span::dummy(), String::from("\tret")),
         ]
     }
 }
