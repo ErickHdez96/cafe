@@ -6,7 +6,7 @@ use std::{
 
 use crate::{
     arena::Arena,
-    diagnostics::Diagnostic,
+    diagnostics::{Diagnostic, DiagnosticBuilder},
     env::Env,
     interner::BuiltinTys,
     span::Span,
@@ -66,6 +66,12 @@ impl TypeChecker<'_> {
                 ast::Item::Import(_, _) => {}
                 ast::Item::Mod(_, _) => {}
                 ast::Item::Define(d) => {
+                    if tys.has_immediate(&d.name.value) {
+                        self.emit_error(|b| {
+                            b.msg("cannot shadow variables in the top-level")
+                                .span(d.name.span)
+                        });
+                    }
                     tys.insert(d.name.value, self.new_var().into());
                     if let Some(e) = &mut d.expr {
                         let ty = self.expr(e, &mut tys);
@@ -274,6 +280,10 @@ impl TypeChecker<'_> {
                 }
             }
         }
+    }
+
+    fn emit_error(&mut self, f: impl FnOnce(DiagnosticBuilder) -> DiagnosticBuilder) {
+        self.diagnostics.push(f(Diagnostic::builder()).finish());
     }
 
     fn new_var(&mut self) -> Ty {

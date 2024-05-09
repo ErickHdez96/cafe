@@ -130,8 +130,8 @@ mod functions {
     fn call_function() {
         check(
             r"(define id (lambda (x) x))
-              (define _ (id #t))
-              (define _ (id #\a))",
+              (define true (id #t))
+              (define a (id #\a))",
             expect![[r#"
                 (pkg
                   (fn (|{|id| (#script ()) 0:8..2}| [_1: '1]) '1 (0:11..14)
@@ -140,26 +140,26 @@ mod functions {
                       (bb 0
                         (copy _0 _1 (0:23..1))
                         (return (0:11..14)))))
-                  (fn (|{|@init| (#script ()) 0:0..93}|) void (0:0..93)
-                    (let ([_0 void (0:0..93)]
-                          [_1 boolean (0:51..7)]
-                          [_2 (-> boolean boolean) (0:52..2)]
-                          [_3 boolean (0:55..2)]
-                          [_4 char (0:84..8)]
-                          [_5 (-> char char) (0:85..2)]
-                          [_6 char (0:88..3)])
+                  (fn (|{|@init| (#script ()) 0:0..96}|) void (0:0..96)
+                    (let ([_0 void (0:0..96)]
+                          [_1 boolean (0:54..7)]
+                          [_2 (-> boolean boolean) (0:55..2)]
+                          [_3 boolean (0:58..2)]
+                          [_4 char (0:87..8)]
+                          [_5 (-> char char) (0:88..2)]
+                          [_6 char (0:91..3)])
                       (bb 0
-                        (addressof _2 |{|id| (#script ()) 0:8..2}| (0:52..2))
-                        (loadI _3 1 (0:55..2))
-                        (arg _3 (0:55..2))
-                        (call _1 _2 (0:51..7))
-                        (store-label |{|_| (#script ()) 0:49..1}| _1 (0:51..7))
-                        (addressof _5 |{|id| (#script ()) 0:8..2}| (0:85..2))
-                        (loadI _6 97 (0:88..3))
-                        (arg _6 (0:88..3))
-                        (call _4 _5 (0:84..8))
-                        (store-label |{|_| (#script ()) 0:82..1}| _4 (0:84..8))
-                        (return (0:0..93))))))
+                        (addressof _2 |{|id| (#script ()) 0:8..2}| (0:55..2))
+                        (loadI _3 1 (0:58..2))
+                        (arg _3 (0:58..2))
+                        (call _1 _2 (0:54..7))
+                        (store-label |{|true| (#script ()) 0:49..4}| _1 (0:54..7))
+                        (addressof _5 |{|id| (#script ()) 0:8..2}| (0:88..2))
+                        (loadI _6 97 (0:91..3))
+                        (arg _6 (0:91..3))
+                        (call _4 _5 (0:87..8))
+                        (store-label |{|a| (#script ()) 0:85..1}| _4 (0:87..8))
+                        (return (0:0..96))))))
             "#]],
         );
     }
