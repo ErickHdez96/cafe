@@ -242,7 +242,11 @@ impl<'tyc> Codegen<'tyc> {
     }
 
     fn gen_body(&mut self, mut body: ir::Body) {
-        let label = canonicalize_symbol(&body.name);
+        let label = if body.name.value.resolve() == "main" {
+            body.name.value
+        } else {
+            canonicalize_symbol(&body.name)
+        };
         self.emit(Inst::pseudo_align(Self::FUNCTION_ALIGNMENT));
         self.emit(Inst::pseudo_global(label));
         self.emit(Inst::pseudo_label(label));
@@ -628,13 +632,13 @@ mod tests {
         use super::*;
 
         #[test]
-        fn boolean() {
+        fn success() {
             check(
                 "(define main (lambda () 0))",
                 expect![[r#"
                     .align 4
-                    .global _T10_35_script4main
-                    _T10_35_script4main:
+                    .global main
+                    main:
                     	sub sp, sp, #16; (0:13..13)
                     	stp x29, x30, [sp, #0]; (0:13..13)
                     	add x29, sp, #0; (0:13..13)
