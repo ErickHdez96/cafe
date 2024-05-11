@@ -1,6 +1,4 @@
-use std::{env, io::Write, path::Path, process::Command};
-
-use anyhow::Context;
+use std::{io::Write, path::Path, process::Command};
 
 use cafe::{asm::Aarch64, compiler::Compiler, driver::compile_asm};
 
@@ -10,7 +8,7 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 #[ignore]
 fn generate_assembly() -> Result<()> {
     for entry in std::fs::read_dir("./tests/cafe")? {
-        let mut path = entry?.path();
+        let path = entry?.path();
         if path.extension().unwrap_or_default() == "cafe" {
             run_test(&path)?;
         }
@@ -24,8 +22,8 @@ fn run_test(source_path: &Path) -> Result<()> {
     let asm_path = {
         let path = source_path.with_extension("S");
         let mut file = std::fs::File::create(&path)?;
-        writeln!(file, "{}", compiler.runtime());
-        writeln!(file, "{}", insts);
+        writeln!(file, "{}", compiler.runtime())?;
+        writeln!(file, "{}", insts)?;
         path
     };
     let binary_path = source_path.with_extension("");
